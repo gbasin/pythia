@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Daily AI Recommendation Panel run.
-# Invoked by launchd via com.ai-rec-panel.daily. Also safe to run manually.
+# pythia — daily panel run.
+# Invoked by launchd via com.pythia.daily. Also safe to run manually.
 set -euo pipefail
 
 # launchd starts with a near-empty env. Restore PATH to include the CLI
@@ -20,6 +20,8 @@ cd "$PROJECT_DIR"
   echo "PATH=$PATH"
   /opt/homebrew/bin/uv run scripts/run_panel.py
   echo "=== panel run finished $(date -u +'%Y-%m-%dT%H:%M:%SZ') ==="
+  echo "--- classifying sentiment ---"
+  /opt/homebrew/bin/uv run scripts/classify_mentions.py
   echo "--- rendering dashboard ---"
   /opt/homebrew/bin/uv run scripts/render_page.py
 } >> "$LOG" 2>&1

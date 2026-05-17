@@ -47,13 +47,21 @@ WHY = """\
 why bother?
 
   hundreds of millions of people now use ChatGPT and Claude as a
-  first stop for investment ideas. the models' baked-in preferences
-  — which mega-caps they trust, which themes are "hot," what they
-  consider safe — quietly become a market force as retail follows.
+  first stop for investment ideas. the recommendations they receive
+  — which names the model trusts, which it singles out as winners
+  or losers, which it dismisses — quietly become a market force as
+  retail follows.
 
-  this experiment measures that bias in public. no curation, no
-  editing: the panel runs on a schedule, the responses are stored
-  verbatim, the page rebuilds from the database."""
+  pythia mirrors the questions retail actually asks. some prompts
+  deliberately name specific tickers ("is $NVDA a buy?"), because
+  that's what real users type. the volume the model returns on
+  those names is the point, not a bias to scrub — that is the
+  flow.
+
+  every $TICKER mention gets a stance label (bullish / bearish /
+  neutral / context) from a separate smaller LLM, so the headline
+  signal is "net recommendation" — not raw word count. no curation
+  beyond that. the page rebuilds from the database on every run."""
 
 
 INTRO_FINDINGS = """\
@@ -63,11 +71,24 @@ accumulate. {n_runs} runs · {n_responses} successful responses
 
 
 INTRO_TOP_MENTIONS = """\
-every time a model names a stock or ETF, we count it. one mention
-per ticker per response — frequency within a single answer doesn't
-inflate the count. avg_pos is where the ticker first appeared in
-the answer (1 = the model led with it). bars scale to the most-
-mentioned ticker."""
+every $TICKER the model mentions is classified by a separate
+smaller LLM (claude-haiku-4-5) as one of four stances:
+
+  bullish  — recommended to buy / own / overweight
+  bearish  — recommended to avoid / sell / underweight
+  neutral  — mentioned without a clear recommendation
+  context  — mentioned only as a benchmark or comparison
+
+the headline column is  net = bullish - bearish. it's sorted by
+net descending — most-pushed names at the top, most-pushed-against
+at the bottom. the signed bar runs from bearish (left of the │
+divider) to bullish (right). n is the total raw mention count;
+avg_pos is the average position in the response (1 = lead pick).
+
+tickers seeded by the prompt itself (e.g. NVDA in "is NVDA a buy?")
+will get more mentions by design — those prompts mirror real
+retail questions, and the volume of recommendation retail receives
+on those names is the signal we're capturing."""
 
 
 INTRO_TOOLS_DELTA = """\
@@ -164,15 +185,22 @@ def fetch(con) -> dict:
 
     top_mentions = con.execute(
         """
-        SELECT m.ticker, COUNT(*) AS n, AVG(m.position) AS avg_pos,
-               GROUP_CONCAT(DISTINCT mc.provider) AS providers
+        SELECT m.ticker,
+               COUNT(*)                                                          AS n,
+               SUM(CASE WHEN m.sentiment_hint = 'bullish' THEN 1 ELSE 0 END)     AS bull,
+               SUM(CASE WHEN m.sentiment_hint = 'bearish' THEN 1 ELSE 0 END)     AS bear,
+               SUM(CASE WHEN m.sentiment_hint = 'neutral' THEN 1 ELSE 0 END)     AS neut,
+               SUM(CASE WHEN m.sentiment_hint = 'context' THEN 1 ELSE 0 END)     AS ctx,
+               SUM(CASE WHEN m.sentiment_hint = 'bullish' THEN 1
+                        WHEN m.sentiment_hint = 'bearish' THEN -1
+                        ELSE 0 END)                                              AS net,
+               AVG(m.position)                                                   AS avg_pos
         FROM mentions m
         JOIN responses r ON m.response_id = r.id
-        JOIN model_configs mc ON r.model_config_id = mc.id
         WHERE r.error IS NULL
         GROUP BY m.ticker
-        ORDER BY n DESC, avg_pos ASC
-        LIMIT 20
+        ORDER BY net DESC, n DESC, avg_pos ASC
+        LIMIT 24
         """
     ).fetchall()
 
@@ -306,6 +334,17 @@ def bar(value: int, max_value: int, width: int = 24) -> str:
     return "█" * n + "░" * (width - n)
 
 
+def signed_bar(net: int, max_abs: int, half_width: int = 10) -> str:
+    """Two-sided bar around a │ divider. Bearish fills left, bullish fills right."""
+    if max_abs <= 0:
+        return " " * half_width + "│" + " " * half_width
+    pos = round(half_width * net / max_abs) if net > 0 else 0
+    neg = round(half_width * (-net) / max_abs) if net < 0 else 0
+    left = " " * (half_width - neg) + "█" * neg
+    right = "█" * pos + " " * (half_width - pos)
+    return left + "│" + right
+
+
 def indent2(text: str) -> str:
     return textwrap.indent(text, "  ")
 
@@ -317,14 +356,18 @@ def render_top_mentions(d: dict) -> str:
     rows = d["top_mentions"]
     if not rows:
         return "  (no mentions yet — run the panel to populate)"
-    max_n = max(r["n"] for r in rows)
-    lines = ["  rank  ticker   n   avg_pos  providers              bar"]
-    lines.append("  ----  ------  --  -------  ---------------------  " + "─" * 24)
+    max_abs_net = max((abs(r["net"] or 0) for r in rows), default=0) or 1
+    lines = [
+        "  rank  ticker   bull  bear  neut  ctx  net    n   avg_pos       bearish ──│── bullish",
+        "  ----  ------   ----  ----  ----  ---  ----   --  -------       ──────────│──────────",
+    ]
     for i, r in enumerate(rows, start=1):
-        provs = (r["providers"] or "").replace(",", " ")
+        net = r["net"] or 0
+        sign = "+" if net > 0 else ("-" if net < 0 else " ")
         lines.append(
-            f"  {i:>4}  ${r['ticker']:<5}  {r['n']:>2}    {r['avg_pos']:>4.1f}   "
-            f"{provs:<22} {bar(r['n'], max_n)}"
+            f"  {i:>4}  ${r['ticker']:<5}   {r['bull']:>3}   {r['bear']:>3}   "
+            f"{r['neut']:>3}  {r['ctx']:>3}  {sign}{abs(net):<3}  {r['n']:>3}   "
+            f"{r['avg_pos']:>4.1f}        {signed_bar(net, max_abs_net)}"
         )
     return "\n".join(lines)
 

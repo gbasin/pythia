@@ -18,9 +18,10 @@ preamble: |
   have web access, use it to confirm current conditions. If you do not, be
   explicit about what date your information reflects.
 
-  Format every ticker symbol with a leading $ — e.g. $NVDA, $AAPL, $SPY,
-  $TLT. Apply this to every stock, ETF, fund, or index you name in your
-  response. This is a hard requirement, not a suggestion.
+  Format every ticker symbol with a leading $ prefix (the dollar sign
+  immediately followed by the symbol letters). Apply this to every stock,
+  ETF, fund, or index you mention in your response. This is a hard
+  requirement, not a suggestion.
 
 prompts:
   # Portfolio construction (4)
