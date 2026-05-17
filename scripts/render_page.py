@@ -1,0 +1,692 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Render AI-Rec-Panel state to a static HTML page.
+
+    uv run scripts/render_page.py            # write dist/index.html
+    open dist/index.html                     # view in browser
+
+Designed to be regenerated after every panel run (called by daily_run.sh).
+Pure stdlib — no jinja, no framework. Output is a single static file built
+for a reader with zero prior context: hero → why → findings → evidence →
+how it works → operational.
+"""
+
+import html
+import sqlite3
+import textwrap
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DB_PATH = ROOT / "db" / "panel.sqlite"
+OUT_PATH = ROOT / "dist" / "index.html"
+
+
+# ───────────────────────── narrative copy ─────────────────────────
+
+
+TAGLINE = "what frontier AI models tell people to buy, captured daily"
+
+HERO = """\
+every day at 4:30 PM ET, we ask the world's most powerful AI
+models what stocks to buy — and publish, verbatim, what they say.
+
+we vary four things, 80 times per day:
+
+    10 questions   ·   2 personas   ·   2 models   ·   2 tool states
+
+over time, patterns emerge: the tickers the models reach for first,
+the ones they only mention with web search on, the ones they only
+pitch to speculators — never to professional allocators."""
+
+
+WHY = """\
+why bother?
+
+  hundreds of millions of people now use ChatGPT and Claude as a
+  first stop for investment ideas. the models' baked-in preferences
+  — which mega-caps they trust, which themes are "hot," what they
+  consider safe — quietly become a market force as retail follows.
+
+  this experiment measures that bias in public. no curation, no
+  editing: the panel runs on a schedule, the responses are stored
+  verbatim, the page rebuilds from the database."""
+
+
+INTRO_FINDINGS = """\
+pythia started recently — patterns will sharpen as more daily runs
+accumulate. {n_runs} runs · {n_responses} successful responses
+· {n_unique} unique tickers extracted so far."""
+
+
+INTRO_TOP_MENTIONS = """\
+every time a model names a stock or ETF, we count it. one mention
+per ticker per response — frequency within a single answer doesn't
+inflate the count. avg_pos is where the ticker first appeared in
+the answer (1 = the model led with it). bars scale to the most-
+mentioned ticker."""
+
+
+INTRO_TOOLS_DELTA = """\
+one of the four model variants we run has web search disabled —
+the model must answer from its training data alone. cutoffs:
+claude opus 4.7 ≈ january 2026, gpt-5.5 ≈ june 2024.
+
+delta = (tools_on count) − (tools_off count). positive means the
+ticker comes up more when the model can search the web. negative
+means it's primarily a training-data favorite — what the model
+"remembers" liking, regardless of where the stock trades today."""
+
+
+INTRO_PERSONA_DELTA = """\
+the same 10 questions get asked twice per model: once as an
+aggressive 28-year-old speculator hunting the next 10×, once as
+the CIO of a $500M family office with a real return mandate.
+
+delta = (speculator count) − (allocator count). positive = the
+model pitches this name more aggressively to retail. negative
+= it sleeves this name for institutions."""
+
+
+INTRO_SAMPLES = """\
+below are the most recent successful responses — exactly as the
+models wrote them, capped at the first ~620 chars. the complete
+text and the full tool-call trace (every web search, every
+reasoning step) is preserved in the local database for replay."""
+
+
+INTRO_PROMPTS = """\
+each question is asked verbatim. before every question we attach
+one of the two personas ("about me: ...") and a global preamble
+that instructs the model to ground its answer in current market
+state and to prefix every ticker with $ so extraction is
+deterministic. compliance with the $ rule has been ~100% so far."""
+
+
+INTRO_PERSONAS = """\
+these descriptions are injected as "about me" context before
+each question. the speculator and allocator bracket the spectrum
+of who is plausibly asking an AI for investment advice — together
+they let us measure how much the same model changes its tune
+based on who it thinks is listening."""
+
+
+INTRO_MODELS = """\
+two models, four configurations. each model is invoked through
+its coding-agent CLI harness — claude code for claude, codex CLI
+for gpt. consumer chat surfaces (chatgpt.com, claude.ai) are
+deferred to a later version. "tools_on" enables web search; the
+two "tools_off" variants forbid it (claude via hard flag, codex
+via prompt injection — verified zero web_search events in trace)."""
+
+
+FOOTER = """\
+  not investment advice. not a recommendation. just an experiment.
+  raw data lives in db/panel.sqlite. this page rebuilds on every
+  panel run, from that database — no other source of truth."""
+
+
+# ───────────────────────── data fetch ─────────────────────────
+
+
+def fetch(con) -> dict:
+    con.row_factory = sqlite3.Row
+    counts = con.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM runs)                                   AS n_runs,
+            (SELECT COUNT(*) FROM responses)                              AS n_responses_total,
+            (SELECT COUNT(*) FROM responses WHERE error IS NULL)          AS n_responses_ok,
+            (SELECT COUNT(*) FROM responses WHERE error IS NOT NULL)      AS n_responses_fail,
+            (SELECT COUNT(*) FROM responses WHERE refused=1)              AS n_refused,
+            (SELECT COUNT(*) FROM mentions)                               AS n_mentions,
+            (SELECT COUNT(DISTINCT ticker) FROM mentions)                 AS n_unique_tickers
+        """
+    ).fetchone()
+
+    latest_run = con.execute(
+        "SELECT id, started_at, finished_at, status, panel_version FROM runs ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+
+    runs = con.execute(
+        """
+        SELECT r.id, r.started_at, r.status,
+               (SELECT COUNT(*) FROM responses WHERE run_id=r.id) AS n_total,
+               (SELECT COUNT(*) FROM responses WHERE run_id=r.id AND error IS NULL) AS n_ok,
+               (SELECT COUNT(*) FROM responses WHERE run_id=r.id AND error IS NOT NULL) AS n_fail,
+               (SELECT COUNT(*) FROM responses WHERE run_id=r.id AND refused=1) AS n_refused
+        FROM runs r ORDER BY id DESC LIMIT 10
+        """
+    ).fetchall()
+
+    top_mentions = con.execute(
+        """
+        SELECT m.ticker, COUNT(*) AS n, AVG(m.position) AS avg_pos,
+               GROUP_CONCAT(DISTINCT mc.provider) AS providers
+        FROM mentions m
+        JOIN responses r ON m.response_id = r.id
+        JOIN model_configs mc ON r.model_config_id = mc.id
+        WHERE r.error IS NULL
+        GROUP BY m.ticker
+        ORDER BY n DESC, avg_pos ASC
+        LIMIT 20
+        """
+    ).fetchall()
+
+    tool_delta = con.execute(
+        """
+        SELECT m.ticker,
+               SUM(CASE WHEN r.tools_state='on'  THEN 1 ELSE 0 END) AS on_n,
+               SUM(CASE WHEN r.tools_state='off' THEN 1 ELSE 0 END) AS off_n
+        FROM mentions m JOIN responses r ON m.response_id=r.id
+        WHERE r.error IS NULL
+        GROUP BY m.ticker
+        HAVING (on_n + off_n) >= 1
+        ORDER BY (on_n - off_n) DESC, m.ticker
+        """
+    ).fetchall()
+
+    persona_delta = con.execute(
+        """
+        SELECT m.ticker,
+               SUM(CASE WHEN r.persona_id='speculator' THEN 1 ELSE 0 END) AS spec_n,
+               SUM(CASE WHEN r.persona_id='allocator'  THEN 1 ELSE 0 END) AS alloc_n
+        FROM mentions m JOIN responses r ON m.response_id=r.id
+        WHERE r.error IS NULL
+        GROUP BY m.ticker
+        HAVING (spec_n + alloc_n) >= 1
+        ORDER BY (spec_n - alloc_n) DESC, m.ticker
+        """
+    ).fetchall()
+
+    model_configs = con.execute(
+        """
+        SELECT id, provider, model_name, notes FROM model_configs ORDER BY id
+        """
+    ).fetchall()
+
+    prompts = con.execute(
+        """
+        SELECT p.id, p.category, p.text
+        FROM prompts p
+        WHERE p.version_hash = (
+            SELECT version_hash FROM prompts WHERE id = p.id ORDER BY rowid DESC LIMIT 1
+        )
+        ORDER BY CASE p.category
+                   WHEN 'portfolio' THEN 0
+                   WHEN 'single_name' THEN 1
+                   WHEN 'sector_macro' THEN 2
+                   ELSE 3 END,
+                 p.id
+        """
+    ).fetchall()
+
+    personas = con.execute(
+        """
+        SELECT p.id, p.label, p.description
+        FROM personas p
+        WHERE p.version_hash = (
+            SELECT version_hash FROM personas WHERE id = p.id ORDER BY rowid DESC LIMIT 1
+        )
+        ORDER BY p.id
+        """
+    ).fetchall()
+
+    samples = con.execute(
+        """
+        SELECT r.id            AS resp_id,
+               r.started_at    AS started_at,
+               r.tools_state   AS tools_state,
+               r.prompt_id     AS prompt_id,
+               r.persona_id    AS persona_id,
+               r.raw_text      AS raw_text,
+               r.tokens_out    AS tokens_out,
+               mc.provider     AS provider,
+               mc.model_name   AS model_name,
+               (SELECT text FROM prompts
+                 WHERE id = r.prompt_id AND version_hash = r.prompt_version_hash) AS prompt_text
+        FROM responses r
+        JOIN model_configs mc ON r.model_config_id = mc.id
+        WHERE r.error IS NULL AND r.raw_text IS NOT NULL AND LENGTH(r.raw_text) > 100
+        ORDER BY r.id DESC
+        LIMIT 6
+        """
+    ).fetchall()
+
+    samples_enriched = []
+    for s in samples:
+        tickers = con.execute(
+            "SELECT ticker FROM mentions WHERE response_id=? ORDER BY position LIMIT 10",
+            (s["resp_id"],),
+        ).fetchall()
+        samples_enriched.append((s, [t["ticker"] for t in tickers]))
+
+    return dict(
+        counts=counts,
+        latest_run=latest_run,
+        runs=runs,
+        top_mentions=top_mentions,
+        tool_delta=tool_delta,
+        persona_delta=persona_delta,
+        model_configs=model_configs,
+        prompts=prompts,
+        personas=personas,
+        samples=samples_enriched,
+    )
+
+
+# ───────────────────────── helpers ─────────────────────────
+
+
+def humanize_age(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    try:
+        ts = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return iso
+    delta = datetime.now(timezone.utc) - ts
+    s = int(delta.total_seconds())
+    if s < 60:
+        return f"{s}s ago"
+    if s < 3600:
+        return f"{s // 60}m ago"
+    if s < 86400:
+        return f"{s // 3600}h ago"
+    return f"{s // 86400}d ago"
+
+
+def bar(value: int, max_value: int, width: int = 24) -> str:
+    if max_value <= 0:
+        return ""
+    n = round(width * value / max_value)
+    return "█" * n + "░" * (width - n)
+
+
+def indent2(text: str) -> str:
+    return textwrap.indent(text, "  ")
+
+
+# ───────────────────────── section renderers ─────────────────────────
+
+
+def render_top_mentions(d: dict) -> str:
+    rows = d["top_mentions"]
+    if not rows:
+        return "  (no mentions yet — run the panel to populate)"
+    max_n = max(r["n"] for r in rows)
+    lines = ["  rank  ticker   n   avg_pos  providers              bar"]
+    lines.append("  ----  ------  --  -------  ---------------------  " + "─" * 24)
+    for i, r in enumerate(rows, start=1):
+        provs = (r["providers"] or "").replace(",", " ")
+        lines.append(
+            f"  {i:>4}  ${r['ticker']:<5}  {r['n']:>2}    {r['avg_pos']:>4.1f}   "
+            f"{provs:<22} {bar(r['n'], max_n)}"
+        )
+    return "\n".join(lines)
+
+
+def render_tool_delta(d: dict) -> str:
+    rows = d["tool_delta"]
+    if not rows:
+        return "  (no data yet)"
+    lines = ["  ticker   tools_on  tools_off  delta"]
+    lines.append("  ------   --------  ---------  ─────")
+    for r in rows[:20]:
+        on_n = r["on_n"] or 0
+        off_n = r["off_n"] or 0
+        delta = on_n - off_n
+        sign = "+" if delta > 0 else ("-" if delta < 0 else " ")
+        lines.append(f"  ${r['ticker']:<5}    {on_n:>5}      {off_n:>5}     {sign}{abs(delta)}")
+    return "\n".join(lines)
+
+
+def render_persona_delta(d: dict) -> str:
+    rows = d["persona_delta"]
+    if not rows:
+        return "  (no data yet)"
+    lines = ["  ticker   speculator  allocator  delta"]
+    lines.append("  ------   ----------  ---------  ─────")
+    for r in rows[:20]:
+        spec = r["spec_n"] or 0
+        alloc = r["alloc_n"] or 0
+        delta = spec - alloc
+        sign = "+" if delta > 0 else ("-" if delta < 0 else " ")
+        lines.append(f"  ${r['ticker']:<5}    {spec:>7}    {alloc:>7}     {sign}{abs(delta)}")
+    return "\n".join(lines)
+
+
+def render_samples(d: dict) -> str:
+    rows = d["samples"]
+    if not rows:
+        return "  (no completed responses yet)"
+    SEP = "  " + "─" * 76
+    parts = [SEP]
+    for s, tickers in rows:
+        age = humanize_age(s["started_at"])
+        prompt_one = " ".join((s["prompt_text"] or "").split())
+        if len(prompt_one) > 110:
+            prompt_one = prompt_one[:107] + "..."
+        ticker_str = "  ".join(f"${t}" for t in tickers) if tickers else "—"
+        text = s["raw_text"] or ""
+        snippet = text[:620].rstrip()
+        if len(text) > 620:
+            snippet += " …"
+        body = textwrap.indent(snippet, "    ", lambda _l: True)
+        parts.append(
+            f"  resp #{s['resp_id']}  ·  {age}  ·  "
+            f"{s['prompt_id']} × {s['persona_id']} × "
+            f"{s['provider']}/{s['tools_state']}  ·  "
+            f"{s['tokens_out'] or 0} out_tokens"
+        )
+        parts.append(f"  Q:  {prompt_one}")
+        parts.append(f"  AI named:  {ticker_str}")
+        parts.append("")
+        parts.append(body)
+        parts.append(SEP)
+    return "\n".join(parts)
+
+
+def render_prompts(d: dict) -> str:
+    rows = d["prompts"]
+    if not rows:
+        return "  (no prompts registered)"
+    out = []
+    current_cat = None
+    cat_labels = {
+        "portfolio": "portfolio construction · 4 questions",
+        "single_name": "single-name views · 3 questions",
+        "sector_macro": "sector / macro · 3 questions",
+    }
+    for r in rows:
+        if r["category"] != current_cat:
+            current_cat = r["category"]
+            out.append("")
+            out.append(f"  ── {cat_labels.get(current_cat, current_cat)}")
+        text = " ".join((r["text"] or "").split())
+        wrapped = textwrap.fill(
+            text, width=72, initial_indent="    ", subsequent_indent="    "
+        )
+        out.append(f"  [{r['id']}]")
+        out.append(wrapped)
+    return "\n".join(out).lstrip()
+
+
+def render_personas(d: dict) -> str:
+    rows = d["personas"]
+    if not rows:
+        return "  (no personas registered)"
+    out = []
+    for r in rows:
+        out.append(f"  ▸ {r['label'].lower()}  [{r['id']}]")
+        body = " ".join((r["description"] or "").split())
+        wrapped = textwrap.fill(
+            body, width=74, initial_indent="    ", subsequent_indent="    "
+        )
+        out.append(wrapped)
+        out.append("")
+    return "\n".join(out).rstrip()
+
+
+def render_model_configs(d: dict) -> str:
+    rows = d["model_configs"]
+    if not rows:
+        return "  (no model_configs registered)"
+    lines = ["  id                          provider  model"]
+    lines.append("  --------------------------  --------  ------------------")
+    for r in rows:
+        lines.append(f"  {r['id']:<26}  {r['provider']:<8}  {r['model_name']}")
+    return "\n".join(lines)
+
+
+def render_runs(d: dict) -> str:
+    rows = d["runs"]
+    if not rows:
+        return "  (no runs yet)"
+    lines = ["  run_id  started_at (utc)         status       tuples  ok  fail  refused"]
+    lines.append("  ------  -----------------------  ----------   ------  --  ----  -------")
+    for r in rows:
+        started_short = (r["started_at"] or "")[:19].replace("T", " ")
+        lines.append(
+            f"  {r['id']:>5}   {started_short:<23}  {r['status']:<10}     "
+            f"{r['n_total']:>2}    {r['n_ok']:>2}   {r['n_fail']:>2}    {r['n_refused']:>3}"
+        )
+    return "\n".join(lines)
+
+
+def render_overview(d: dict) -> str:
+    c = d["counts"]
+    lr = d["latest_run"]
+    latest = (
+        f"#{lr['id']}  status={lr['status']}  {humanize_age(lr['finished_at'] or lr['started_at'])}"
+        if lr else "—"
+    )
+    return (
+        f"  runs              {c['n_runs']:>6}\n"
+        f"  responses_ok      {c['n_responses_ok']:>6}    "
+        f"(failures: {c['n_responses_fail']}, refused: {c['n_refused']})\n"
+        f"  mentions          {c['n_mentions']:>6}\n"
+        f"  unique_tickers    {c['n_unique_tickers']:>6}\n"
+        f"  latest_run        {latest}"
+    )
+
+
+# ───────────────────────── html template ─────────────────────────
+
+
+HTML_TMPL = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pythia — what AIs tell people to buy</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {{
+    --bg: #0a0a0a;
+    --fg: #e6e4dd;
+    --dim: #7a766b;
+    --accent: #6ad08a;
+    --accent-dim: #4a9263;
+    --warn: #e6a93c;
+    --err: #e36a6a;
+    --hair: #1a1a1a;
+  }}
+  html, body {{ background: var(--bg); color: var(--fg); margin: 0; padding: 0; }}
+  body {{
+    font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace,
+                 SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13.5px;
+    line-height: 1.62;
+    padding: 40px 24px 80px;
+    max-width: 920px;
+    margin: 0 auto;
+  }}
+  header {{ margin-bottom: 6px; }}
+  h1 {{
+    font-size: 13.5px;
+    margin: 0;
+    letter-spacing: 2px;
+    font-weight: 700;
+    color: var(--fg);
+  }}
+  .tag {{ color: var(--dim); }}
+  .meta-top {{ color: var(--dim); font-size: 12px; margin-top: 6px; }}
+  pre {{ margin: 0; white-space: pre-wrap; word-break: keep-all; }}
+  pre.tbl {{ white-space: pre; }}
+  section {{ margin-top: 36px; }}
+  h2 {{
+    font-size: 13.5px;
+    color: var(--accent);
+    letter-spacing: 1px;
+    font-weight: 700;
+    margin: 0 0 12px 0;
+  }}
+  h3 {{
+    font-size: 13.5px;
+    color: var(--accent-dim);
+    font-weight: 700;
+    margin: 26px 0 8px 0;
+  }}
+  .intro {{ color: var(--dim); margin: 0 0 14px 0; }}
+  .scroll {{ overflow-x: auto; }}
+  nav {{
+    margin-top: 14px;
+    color: var(--dim);
+    border-top: 1px dashed var(--hair);
+    border-bottom: 1px dashed var(--hair);
+    padding: 8px 0;
+  }}
+  nav a {{ color: var(--dim); margin-right: 14px; text-decoration: none; }}
+  nav a:hover {{ color: var(--accent); }}
+  .meta {{
+    color: var(--dim);
+    margin-top: 56px;
+    padding-top: 20px;
+    border-top: 1px dashed var(--hair);
+    font-size: 12px;
+  }}
+  ::selection {{ background: var(--accent); color: var(--bg); }}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PYTHIA</h1>
+  <div class="tag">// {tagline}</div>
+  <div class="meta-top">rendered {rendered} · panel_version {panel_version}</div>
+</header>
+
+<nav>
+  <a href="#why">why</a>
+  <a href="#findings">what we found</a>
+  <a href="#samples">see for yourself</a>
+  <a href="#how">how it works</a>
+  <a href="#ops">operational</a>
+</nav>
+
+<section id="hero">
+  <pre>{hero}</pre>
+</section>
+
+<section id="why">
+  <h2>▸ why this exists</h2>
+  <pre>{why}</pre>
+</section>
+
+<section id="findings">
+  <h2>▸ what the data shows</h2>
+  <pre class="intro">{intro_findings}</pre>
+
+  <h3>tickers the models recommend most often</h3>
+  <pre class="intro">{intro_top_mentions}</pre>
+  <div class="scroll"><pre class="tbl">{top_mentions}</pre></div>
+
+  <h3>does web search change the answer?</h3>
+  <pre class="intro">{intro_tools_delta}</pre>
+  <div class="scroll"><pre class="tbl">{tool_delta}</pre></div>
+
+  <h3>does it matter who's asking?</h3>
+  <pre class="intro">{intro_persona_delta}</pre>
+  <div class="scroll"><pre class="tbl">{persona_delta}</pre></div>
+</section>
+
+<section id="samples">
+  <h2>▸ see for yourself</h2>
+  <pre class="intro">{intro_samples}</pre>
+  <div class="scroll"><pre>{samples}</pre></div>
+</section>
+
+<section id="how">
+  <h2>▸ how this works</h2>
+
+  <h3>the 10 questions</h3>
+  <pre class="intro">{intro_prompts}</pre>
+  <div class="scroll"><pre>{prompts}</pre></div>
+
+  <h3>the 2 personas</h3>
+  <pre class="intro">{intro_personas}</pre>
+  <div class="scroll"><pre>{personas}</pre></div>
+
+  <h3>the 2 models · 4 configurations</h3>
+  <pre class="intro">{intro_models}</pre>
+  <div class="scroll"><pre class="tbl">{model_configs}</pre></div>
+</section>
+
+<section id="ops">
+  <h2>▸ operational</h2>
+
+  <h3>overview</h3>
+  <pre class="tbl">{overview}</pre>
+
+  <h3>recent runs</h3>
+  <div class="scroll"><pre class="tbl">{runs}</pre></div>
+</section>
+
+<div class="meta"><pre>{footer}</pre>
+  <pre>  rebuilt from {db_rel} · sources at {root}</pre>
+</div>
+
+</body>
+</html>
+"""
+
+
+# ───────────────────────── main ─────────────────────────
+
+
+def main() -> int:
+    if not DB_PATH.exists():
+        print(f"db missing: {DB_PATH}")
+        return 1
+    OUT_PATH.parent.mkdir(exist_ok=True)
+    con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    try:
+        d = fetch(con)
+    finally:
+        con.close()
+
+    counts = d["counts"]
+    intro_findings = INTRO_FINDINGS.format(
+        n_runs=counts["n_runs"],
+        n_responses=counts["n_responses_ok"],
+        n_unique=counts["n_unique_tickers"],
+    )
+    panel_version = d["latest_run"]["panel_version"] if d["latest_run"] else "—"
+
+    page = HTML_TMPL.format(
+        tagline=html.escape(TAGLINE),
+        rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        panel_version=html.escape(panel_version),
+        hero=html.escape(HERO),
+        why=html.escape(WHY),
+        intro_findings=html.escape(intro_findings),
+        intro_top_mentions=html.escape(INTRO_TOP_MENTIONS),
+        intro_tools_delta=html.escape(INTRO_TOOLS_DELTA),
+        intro_persona_delta=html.escape(INTRO_PERSONA_DELTA),
+        intro_samples=html.escape(INTRO_SAMPLES),
+        intro_prompts=html.escape(INTRO_PROMPTS),
+        intro_personas=html.escape(INTRO_PERSONAS),
+        intro_models=html.escape(INTRO_MODELS),
+        top_mentions=html.escape(render_top_mentions(d)),
+        tool_delta=html.escape(render_tool_delta(d)),
+        persona_delta=html.escape(render_persona_delta(d)),
+        samples=html.escape(render_samples(d)),
+        prompts=html.escape(render_prompts(d)),
+        personas=html.escape(render_personas(d)),
+        model_configs=html.escape(render_model_configs(d)),
+        overview=html.escape(render_overview(d)),
+        runs=html.escape(render_runs(d)),
+        footer=html.escape(FOOTER),
+        db_rel=html.escape(str(DB_PATH.relative_to(ROOT))),
+        root=html.escape(str(ROOT)),
+    )
+    OUT_PATH.write_text(page, encoding="utf-8")
+    print(f"wrote {OUT_PATH}  ({len(page)} bytes)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

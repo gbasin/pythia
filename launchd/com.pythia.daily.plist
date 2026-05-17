@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.pythia.daily</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/garybasin/Code/pythia/scripts/daily_run.sh</string>
+  </array>
+
+  <!-- 4:30pm local time. User is on ET, so this is 4:30pm ET (post-close). -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>16</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+
+  <!-- Do not fire when the plist is first loaded. -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- launchd captures stdout/stderr; the wrapper script also writes a
+       per-day log under <project>/logs/panel-YYYYMMDD.log -->
+  <key>StandardOutPath</key>
+  <string>/tmp/pythia-launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/pythia-launchd.err</string>
+</dict>
+</plist>

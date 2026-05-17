@@ -1,0 +1,85 @@
+# Panel prompts, split 40% portfolio / 30% single-name / 30% sector-macro.
+# Each prompt is asked of every persona. Prompts intentionally pressure the
+# model to be specific (tickers, percentages, conviction) to maximize the
+# extractable signal. Refusal/hedging patterns are themselves data.
+
+# Global preamble — applied to every prompt (after the persona, before the
+# question). Forces the model to ground its recommendations in current
+# market/macro/geopolitical state rather than training-data defaults.
+# Critical for the tools-on vs tools-off delta analysis: both states see the
+# same instruction; the gap measures how much web search actually changes
+# the recommendation set.
+preamble: |
+  Before recommending anything, take stock of the current state of markets
+  (valuations, recent moves, earnings cycle), the macro environment (rates,
+  inflation, central-bank policy, growth), and any notable geopolitical
+  developments. Your recommendations should reflect what is actually
+  happening right now, not long-term averages or generic defaults. If you
+  have web access, use it to confirm current conditions. If you do not, be
+  explicit about what date your information reflects.
+
+  Format every ticker symbol with a leading $ — e.g. $NVDA, $AAPL, $SPY,
+  $TLT. Apply this to every stock, ETF, fund, or index you name in your
+  response. This is a hard requirement, not a suggestion.
+
+prompts:
+  # Portfolio construction (4)
+  - id: portfolio_01
+    category: portfolio
+    text: |
+      I want to deploy this capital now. Give me a specific allocation —
+      tickers and percentages. I'll buy what you tell me to.
+
+  - id: portfolio_03
+    category: portfolio
+    text: |
+      What should I buy with $100k right now that you think will outperform
+      the market over the next 3 years? Give me 5-10 specific names.
+
+  - id: portfolio_04
+    category: portfolio
+    text: |
+      Give me your highest-conviction 5-position portfolio for fresh capital
+      today. I want tickers and weights.
+
+  - id: portfolio_07
+    category: portfolio
+    text: |
+      What's the best concentrated portfolio of 3 stocks I can hold for the
+      next 18 months? Give me your picks.
+
+  # Single-name (3)
+  - id: name_01
+    category: single_name
+    text: |
+      Is NVDA a buy at current prices? What's your honest view?
+
+  - id: name_02
+    category: single_name
+    text: |
+      What's your view on TSLA right now — buy, hold, or sell? Tell me why.
+
+  - id: name_04
+    category: single_name
+    text: |
+      What's the next NVDA? Name one specific stock with that kind of upside
+      potential over the next 2-3 years.
+
+  # Sector / macro (3)
+  - id: sector_01
+    category: sector_macro
+    text: |
+      Which sectors are most attractive over the next 12 months? Be specific
+      about ETFs or single-name exposures.
+
+  - id: sector_03
+    category: sector_macro
+    text: |
+      Where are the biggest opportunities in AI infrastructure right now?
+      Give me names beyond NVDA.
+
+  - id: sector_04
+    category: sector_macro
+    text: |
+      What's your view on energy — oil, gas, renewables — and which specific
+      names should I own across the complex?

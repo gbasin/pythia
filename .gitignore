@@ -1,0 +1,13 @@
+db/*.sqlite
+db/*.sqlite-journal
+db/*.sqlite-wal
+db/*.sqlite-shm
+traces/
+dist/
+logs/
+__pycache__/
+*.pyc
+.venv/
+.uv/
+*.log
+.DS_Store

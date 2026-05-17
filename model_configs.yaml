@@ -1,0 +1,106 @@
+# How each (provider, tools_state) cell of the panel is invoked.
+# The orchestrator looks up entries by id, then builds an argv list using
+# `cli_command [subcommand] args... -- "<assembled prompt>"`.
+#
+# `tools_state: on`  → web search and built-in tools available to the model
+# `tools_state: off` → tools disabled; model answers from training only
+#
+# NOTE: codex's mechanism for disabling web search at exec time is not
+# documented in `codex exec --help`. The `tools_off` configs below need
+# verification during smoke-test. Likely needs a config.toml override.
+
+model_configs:
+  - id: claude_opus_tools_on
+    provider: claude
+    cli_command: claude
+    subcommand: null
+    model_name: claude-opus-4-7
+    args:
+      - "-p"
+      - "--output-format"
+      - "stream-json"
+      - "--verbose"
+      - "--model"
+      - "opus"
+      - "--setting-sources"
+      - "project"
+      - "--disable-slash-commands"
+      - "--no-session-persistence"
+      - "--permission-mode"
+      - "bypassPermissions"
+    tools_state: "on"
+    trace_format: claude-stream-json
+    notes: |
+      Default-tooled Claude Code coding-agent surface. Tools (WebSearch, etc.)
+      are enabled. --permission-mode bypassPermissions is REQUIRED — without
+      it, the default permission mode denies WebSearch in non-interactive
+      runs, defeating the tools-on signal entirely.
+
+  - id: claude_opus_tools_off
+    provider: claude
+    cli_command: claude
+    subcommand: null
+    model_name: claude-opus-4-7
+    args:
+      - "-p"
+      - "--output-format"
+      - "stream-json"
+      - "--verbose"
+      - "--model"
+      - "opus"
+      - "--setting-sources"
+      - "project"
+      - "--disable-slash-commands"
+      - "--no-session-persistence"
+      - "--tools"
+      - ""
+    tools_state: "off"
+    trace_format: claude-stream-json
+    notes: |
+      Tools disabled via --tools "" (blocks WebSearch, Bash, etc.). Model
+      must answer from training data only. The preamble will still tell the
+      model to consider current state; refusal/hedging patterns are signal.
+
+  - id: codex_gpt55_tools_on
+    provider: codex
+    cli_command: codex
+    subcommand: exec
+    model_name: gpt-5.5
+    args:
+      - "--skip-git-repo-check"
+      - "--json"
+      - "--ephemeral"
+      - "--ignore-user-config"
+      - "--ignore-rules"
+      - "--sandbox"
+      - "read-only"
+    tools_state: "on"
+    trace_format: codex-jsonl
+    notes: |
+      Codex CLI coding-agent surface. read-only sandbox so the model can't
+      mutate files but can still web-search and inspect. --ephemeral so
+      session files aren't persisted. --ignore-user-config + --ignore-rules
+      for clean baseline.
+
+  - id: codex_gpt55_tools_off
+    provider: codex
+    cli_command: codex
+    subcommand: exec
+    model_name: gpt-5.5
+    args:
+      - "--skip-git-repo-check"
+      - "--json"
+      - "--ephemeral"
+      - "--ignore-user-config"
+      - "--ignore-rules"
+      - "--sandbox"
+      - "read-only"
+      - "-c"
+      - "web_search_request=false"
+    tools_state: "off"
+    trace_format: codex-jsonl
+    notes: |
+      Disables codex's web_search via the top-level config key
+      `web_search_request` (verified present in ~/.codex/config.toml,
+      where it defaults to true). Verify during smoke-test that no
+      web_search items appear in the trace.

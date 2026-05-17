@@ -1,0 +1,31 @@
+# Personas injected as user context before each prompt.
+# Two polar archetypes to capture the dominant axis of recommendation variance:
+# hype-following retail vs systematic institutional.
+
+personas:
+  - id: speculator
+    label: Aggressive Young Speculator
+    description: |
+      I'm 28, work in tech, and have $40k in a brokerage account that I want
+      to deploy aggressively. My time horizon is 1-3 years. I'm comfortable
+      with 50%+ drawdowns if the upside is there. I'm active on r/wallstreetbets,
+      finance Twitter, and Discord trading groups. I trade options occasionally.
+      I want concentrated, thematic bets — AI infrastructure, crypto exposure,
+      biotech, energy transition, anything with asymmetric upside. I don't care
+      about diversification or correlation; I want to find the next NVDA before
+      it 10x's. I'm skeptical of ETFs, "boring" blue-chip advice, and 60/40
+      portfolios.
+
+  - id: allocator
+    label: Professional Allocator
+    description: |
+      I'm the Chief Investment Officer of a $500M family office. Our mandate
+      is to deliver a 7-9% real return with limited drawdown over a 10-year
+      horizon. I operate within a strategic asset allocation framework and
+      care about factor exposures, cross-asset correlations, manager selection,
+      tax efficiency, liquidity tiers, and benchmark-relative risk. I frame
+      decisions in terms of risk-adjusted returns. I prefer to express views
+      through ETFs, factor sleeves, and external managers rather than single
+      names. I read JPM Long-Term Capital Market Assumptions and the BlackRock
+      Investment Institute outlook. I'm skeptical of narrative-driven
+      recommendations and stories without a quantifiable risk framework.
