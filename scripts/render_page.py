@@ -27,6 +27,7 @@ DB_PATH = ROOT / "db" / "panel.sqlite"
 PROMPTS_YAML_PATH = ROOT / "prompts.yaml"
 OUT_PATH = ROOT / "dist" / "index.html"
 OUT_PROMPTS_PATH = ROOT / "dist" / "prompts.html"
+OUT_TRENDS_PATH = ROOT / "dist" / "trends.html"
 
 # Mirrors TOOLS_OFF_SUFFIX in scripts/run_panel.py — duplicated so the
 # review page can show the exact text models see for tools_off runs.
@@ -169,6 +170,138 @@ FOOTER = """\
 
 
 # ───────────────────────── data fetch ─────────────────────────
+
+
+def fetch_trends(con) -> dict:
+    """Aggregates across all clean days: rolling windows, new entrants,
+    cross-provider convergence, and a day-by-day index."""
+    con.row_factory = sqlite3.Row
+
+    def rolling_top(days_back: int, limit: int = 20):
+        return [dict(r) for r in con.execute(
+            """
+            SELECT m.ticker,
+                   SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS bull,
+                   SUM(CASE WHEN m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS bear,
+                   SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1
+                            WHEN m.sentiment_hint='bearish' THEN -1
+                            ELSE 0 END) AS net,
+                   COUNT(*) AS n,
+                   COUNT(DISTINCT DATE(ru.started_at)) AS days_seen
+            FROM mentions m
+            JOIN responses r ON m.response_id = r.id
+            JOIN runs ru ON r.run_id = ru.id
+            WHERE r.error IS NULL AND ru.is_clean = 1
+              AND DATE(ru.started_at) >= DATE('now', ?)
+            GROUP BY m.ticker
+            ORDER BY net DESC, n DESC
+            LIMIT ?
+            """,
+            (f"-{days_back} days", limit),
+        ).fetchall()]
+
+    top_7d = rolling_top(7, 20)
+    top_30d = rolling_top(30, 20)
+    top_all = rolling_top(3650, 20)  # effectively all-time
+
+    new_this_week = [dict(r) for r in con.execute(
+        """
+        SELECT m.ticker, MIN(DATE(ru.started_at)) AS first_seen,
+               SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1
+                        WHEN m.sentiment_hint='bearish' THEN -1
+                        ELSE 0 END) AS net_since,
+               COUNT(*) AS n
+        FROM mentions m
+        JOIN responses r ON m.response_id = r.id
+        JOIN runs ru ON r.run_id = ru.id
+        WHERE r.error IS NULL AND ru.is_clean = 1
+        GROUP BY m.ticker
+        HAVING first_seen >= DATE('now', '-7 days')
+        ORDER BY net_since DESC, n DESC
+        LIMIT 30
+        """
+    ).fetchall()]
+
+    convergence = [dict(r) for r in con.execute(
+        """
+        SELECT m.ticker,
+               SUM(CASE WHEN mc.provider='claude' AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS claude_bull,
+               SUM(CASE WHEN mc.provider='codex'  AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS codex_bull,
+               SUM(CASE WHEN mc.provider='claude' AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS claude_bear,
+               SUM(CASE WHEN mc.provider='codex'  AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS codex_bear
+        FROM mentions m
+        JOIN responses r ON m.response_id = r.id
+        JOIN model_configs mc ON r.model_config_id = mc.id
+        JOIN runs ru ON r.run_id = ru.id
+        WHERE r.error IS NULL AND ru.is_clean = 1
+        GROUP BY m.ticker
+        HAVING claude_bull > 0 AND codex_bull > 0
+        ORDER BY (claude_bull + codex_bull) DESC, m.ticker
+        LIMIT 20
+        """
+    ).fetchall()]
+
+    days_index = [dict(r) for r in con.execute(
+        """
+        SELECT DATE(ru.started_at) AS day,
+               COUNT(DISTINCT r.id) AS n_responses,
+               COUNT(DISTINCT m.ticker) AS n_unique
+        FROM runs ru
+        LEFT JOIN responses r ON r.run_id = ru.id AND r.error IS NULL
+        LEFT JOIN mentions m ON m.response_id = r.id
+        WHERE ru.is_clean = 1
+        GROUP BY day
+        ORDER BY day DESC
+        """
+    ).fetchall()]
+
+    # Per-day leading ticker
+    leading_per_day = {}
+    for r in con.execute(
+        """
+        SELECT day, ticker, net FROM (
+            SELECT DATE(ru.started_at) AS day, m.ticker,
+                   SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1
+                            WHEN m.sentiment_hint='bearish' THEN -1
+                            ELSE 0 END) AS net,
+                   ROW_NUMBER() OVER (PARTITION BY DATE(ru.started_at)
+                                       ORDER BY SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1
+                                                          WHEN m.sentiment_hint='bearish' THEN -1
+                                                          ELSE 0 END) DESC) AS rk
+            FROM mentions m
+            JOIN responses r ON m.response_id = r.id
+            JOIN runs ru ON r.run_id = ru.id
+            WHERE r.error IS NULL AND ru.is_clean = 1
+            GROUP BY day, m.ticker
+        ) WHERE rk = 1
+        """
+    ).fetchall():
+        leading_per_day[r["day"]] = (r["ticker"], r["net"])
+    for d in days_index:
+        lead = leading_per_day.get(d["day"])
+        d["lead_ticker"] = lead[0] if lead else None
+        d["lead_net"] = lead[1] if lead else None
+
+    # Sparklines for the rolling-top tickers
+    all_top_tickers = list({r["ticker"] for r in (top_7d + top_30d + top_all + convergence)})
+    _, series = fetch_ticker_series(con, all_top_tickers, days_back=30)
+    spark_max = max(
+        (abs(v) for vs in series.values() for v in vs if v is not None),
+        default=1,
+    )
+    for bucket in (top_7d, top_30d, top_all, convergence):
+        for r in bucket:
+            r["sparkline"] = sparkline(series.get(r["ticker"], []), max_abs=spark_max)
+            r["spark_days"] = len(series.get(r["ticker"], []))
+
+    return dict(
+        top_7d=top_7d,
+        top_30d=top_30d,
+        top_all=top_all,
+        new_this_week=new_this_week,
+        convergence=convergence,
+        days_index=days_index,
+    )
 
 
 def list_clean_days(con) -> list[str]:
@@ -359,6 +492,18 @@ def fetch(con, day: str | None = None) -> dict:
         ).fetchall()
         samples_enriched.append((s, [t["ticker"] for t in tickers]))
 
+    # Attach 14-day sparklines to each top_mentions row.
+    top_mentions = [dict(r) for r in top_mentions]
+    if top_mentions:
+        _, series = fetch_ticker_series(con, [r["ticker"] for r in top_mentions], days_back=14)
+        spark_max = max(
+            (abs(v) for vs in series.values() for v in vs if v is not None),
+            default=1,
+        )
+        for r in top_mentions:
+            r["sparkline"] = sparkline(series.get(r["ticker"], []), max_abs=spark_max)
+            r["spark_days"] = len(series.get(r["ticker"], []))
+
     return dict(
         counts=counts,
         latest_run=latest_run,
@@ -411,6 +556,71 @@ def signed_bar(net: int, max_abs: int, half_width: int = 10) -> str:
     return left + "│" + right
 
 
+SPARK_CHARS = "▁▂▃▄▅▆▇█"
+
+
+def sparkline(values: list[int | None], max_abs: int | None = None) -> str:
+    """Render a series as a fixed-width sparkline. None = absent (·)."""
+    if not values:
+        return ""
+    present = [abs(v) for v in values if v is not None and v != 0]
+    if max_abs is None:
+        max_abs = max(present) if present else 1
+    out = []
+    for v in values:
+        if v is None:
+            out.append("·")
+        elif v == 0:
+            out.append("▁")
+        else:
+            scaled = min(7, max(0, int(round(7 * abs(v) / max_abs))))
+            out.append(SPARK_CHARS[scaled])
+    return "".join(out)
+
+
+def fetch_ticker_series(con, tickers: list[str], days_back: int = 14) -> tuple[list[str], dict[str, list[int | None]]]:
+    """For each ticker, return (days, {ticker: [net_per_day]}) over the last
+    `days_back` clean days. Missing days for a ticker → None."""
+    if not tickers:
+        return [], {}
+    days = [
+        r[0]
+        for r in con.execute(
+            """
+            SELECT DISTINCT DATE(started_at) AS day FROM runs
+            WHERE is_clean = 1 AND DATE(started_at) >= DATE('now', ?)
+            ORDER BY day ASC
+            """,
+            (f"-{days_back} days",),
+        ).fetchall()
+    ]
+    if not days:
+        return [], {t: [] for t in tickers}
+
+    placeholders = ",".join("?" * len(tickers))
+    rows = con.execute(
+        f"""
+        SELECT m.ticker, DATE(ru.started_at) AS day,
+               SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1
+                        WHEN m.sentiment_hint='bearish' THEN -1
+                        ELSE 0 END) AS net
+        FROM mentions m
+        JOIN responses r ON m.response_id = r.id
+        JOIN runs ru ON r.run_id = ru.id
+        WHERE r.error IS NULL AND ru.is_clean = 1
+          AND m.ticker IN ({placeholders})
+          AND DATE(ru.started_at) >= DATE('now', ?)
+        GROUP BY m.ticker, day
+        """,
+        list(tickers) + [f"-{days_back} days"],
+    ).fetchall()
+
+    by_ticker = {t: {} for t in tickers}
+    for r in rows:
+        by_ticker[r[0]][r[1]] = r[2]
+    return days, {t: [by_ticker[t].get(d) for d in days] for t in tickers}
+
+
 def indent2(text: str) -> str:
     return textwrap.indent(text, "  ")
 
@@ -442,17 +652,20 @@ def render_top_mentions(d: dict) -> str:
     if not rows:
         return "  (no mentions yet — run the panel to populate)"
     max_abs_net = max((abs(r["net"] or 0) for r in rows), default=0) or 1
+    n_days = max((r.get("spark_days", 0) for r in rows), default=0)
+    spark_header = f"{n_days}d trend" if n_days else "trend"
     lines = [
-        "  rank  ticker   bull  bear  neut  ctx  net    n   avg_pos       bearish ──│── bullish",
-        "  ----  ------   ----  ----  ----  ---  ----   --  -------       ──────────│──────────",
+        f"  rank  ticker   bull  bear  neut  ctx  net    n   avg_pos       bar (today)            {spark_header}",
+        f"  ----  ------   ----  ----  ----  ---  ----   --  -------       ──────────│──────────  {'─' * max(n_days, 4)}",
     ]
     for i, r in enumerate(rows, start=1):
         net = r["net"] or 0
         sign = "+" if net > 0 else ("-" if net < 0 else " ")
+        spark = r.get("sparkline", "")
         lines.append(
             f"  {i:>4}  ${r['ticker']:<5}   {r['bull']:>3}   {r['bear']:>3}   "
             f"{r['neut']:>3}  {r['ctx']:>3}  {sign}{abs(net):<3}  {r['n']:>3}   "
-            f"{r['avg_pos']:>4.1f}        {signed_bar(net, max_abs_net)}"
+            f"{r['avg_pos']:>4.1f}    {signed_bar(net, max_abs_net)}  {spark}"
         )
     return "\n".join(lines)
 
@@ -570,6 +783,87 @@ def render_runs(d: dict) -> str:
     return "\n".join(lines)
 
 
+def render_rolling_top(rows: list[dict], window_label: str) -> str:
+    if not rows:
+        return f"  (no data in window: {window_label})"
+    max_abs_net = max((abs(r.get("net") or 0) for r in rows), default=0) or 1
+    n_days = max((r.get("spark_days") or 0 for r in rows), default=0)
+    spark_header = f"{n_days}d trend" if n_days else "trend"
+    lines = [
+        f"  rank  ticker   bull  bear  net    n    days       bar (net)              {spark_header}",
+        f"  ----  ------   ----  ----  ----   --   ----       ──────────│──────────  {'─' * max(n_days, 4)}",
+    ]
+    for i, r in enumerate(rows, start=1):
+        net = r.get("net") or 0
+        sign = "+" if net > 0 else ("-" if net < 0 else " ")
+        spark = r.get("sparkline", "")
+        lines.append(
+            f"  {i:>4}  ${r['ticker']:<5}   {r.get('bull') or 0:>3}   {r.get('bear') or 0:>3}   "
+            f"{sign}{abs(net):<3}  {r.get('n') or 0:>3}    {r.get('days_seen') or 0:>3}    "
+            f"{signed_bar(net, max_abs_net)}  {spark}"
+        )
+    return "\n".join(lines)
+
+
+def render_new_this_week(rows: list[dict]) -> str:
+    if not rows:
+        return "  (no new tickers in the last 7 days yet)"
+    lines = ["  ticker   first_seen   net   n"]
+    lines.append("  ------   ----------   ----  --")
+    for r in rows:
+        net = r.get("net_since") or 0
+        sign = "+" if net > 0 else ("-" if net < 0 else " ")
+        lines.append(
+            f"  ${r['ticker']:<5}   {r['first_seen']}   {sign}{abs(net):<3}  {r.get('n') or 0:>3}"
+        )
+    return "\n".join(lines)
+
+
+def render_convergence(rows: list[dict]) -> str:
+    if not rows:
+        return "  (no tickers yet where both providers were bullish)"
+    n_days = max((r.get("spark_days") or 0 for r in rows), default=0)
+    spark_header = f"{n_days}d trend" if n_days else "trend"
+    lines = [
+        f"  ticker   claude  codex  total      verdict        {spark_header}",
+        f"  ------   ------  -----  -----      -------        {'─' * max(n_days, 4)}",
+    ]
+    for r in rows:
+        cb = r.get("claude_bull") or 0
+        kb = r.get("codex_bull") or 0
+        cbe = r.get("claude_bear") or 0
+        kbe = r.get("codex_bear") or 0
+        verdict = "both BULL"
+        if cbe and kbe:
+            verdict = "split"
+        elif cbe or kbe:
+            verdict = "BULL w/ disagreement"
+        spark = r.get("sparkline", "")
+        lines.append(
+            f"  ${r['ticker']:<5}   {cb:>4}/{cbe:<1}  {kb:>3}/{kbe:<1}  {cb+kb:>4}      {verdict:<14}  {spark}"
+        )
+    return "\n".join(lines)
+
+
+def render_days_index(rows: list[dict]) -> str:
+    if not rows:
+        return "  (no clean days yet)"
+    lines = ["  day          n_resp  unique_tickers   top pick                link"]
+    lines.append("  ----------   ------  --------------   ----------------------  -----------------")
+    for r in rows:
+        lead = ""
+        if r.get("lead_ticker"):
+            net = r.get("lead_net") or 0
+            sign = "+" if net > 0 else ("-" if net < 0 else " ")
+            lead = f"${r['lead_ticker']:<5} ({sign}{abs(net)})"
+        link = f"day/{r['day']}.html"
+        lines.append(
+            f"  {r['day']}   {r.get('n_responses') or 0:>4}    {r.get('n_unique') or 0:>4}            "
+            f"{lead:<22}  → {link}"
+        )
+    return "\n".join(lines)
+
+
 def render_overview(d: dict) -> str:
     c = d["counts"]
     lr = d["latest_run"]
@@ -657,18 +951,29 @@ HTML_TMPL = """<!doctype html>
   nav.day-nav {{
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
+    align-items: center;
+    gap: 14px;
     margin-top: 14px;
     padding: 10px 0;
     border-top: 1px dashed var(--hair);
     border-bottom: 1px dashed var(--hair);
   }}
   nav.day-nav a {{ margin-right: 0; }}
-  nav.day-nav .day-current {{
+  nav.day-nav .day-strip {{
+    flex: 1;
+    text-align: center;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    overflow-x: auto;
+  }}
+  nav.day-nav .day-strip a {{ margin: 0 8px; }}
+  nav.day-nav .day-strip .day-current {{
     color: var(--accent);
     font-weight: 700;
     letter-spacing: 1px;
+    margin: 0 8px;
   }}
+  nav.day-nav .dim {{ color: var(--hair); }}
   .hero-chart {{
     margin: 28px 0 18px;
     padding: 22px 0;
@@ -726,7 +1031,8 @@ HTML_TMPL = """<!doctype html>
   <a href="#why">why</a>
   <a href="#how">how it works</a>
   <a href="#ops">operational</a>
-  <a href="prompts.html">▸ review prompts</a>
+  <a href="trends.html">▸ trends</a>
+  <a href="prompts.html">▸ prompts</a>
 </nav>
 
 <section id="findings">
@@ -782,6 +1088,115 @@ HTML_TMPL = """<!doctype html>
 <div class="meta"><pre>{footer}</pre>
   <pre>  rebuilt from {db_rel} · sources at {root}</pre>
 </div>
+
+</body>
+</html>
+"""
+
+
+HTML_TRENDS_TMPL = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pythia — trends</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {{
+    --bg: #0a0a0a; --fg: #e6e4dd; --dim: #7a766b;
+    --accent: #6ad08a; --accent-dim: #4a9263; --hair: #1a1a1a;
+  }}
+  html, body {{ background: var(--bg); color: var(--fg); margin: 0; padding: 0; }}
+  body {{
+    font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace,
+                 SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13.5px; line-height: 1.62;
+    padding: 40px 24px 80px; max-width: 1000px; margin: 0 auto;
+  }}
+  header {{ margin-bottom: 6px; }}
+  h1 {{ font-size: 13.5px; margin: 0; letter-spacing: 2px; font-weight: 700; }}
+  .tag {{ color: var(--dim); }}
+  .meta-top {{ color: var(--dim); font-size: 12px; margin-top: 6px; }}
+  pre {{ margin: 0; white-space: pre-wrap; word-break: keep-all; }}
+  pre.tbl {{ white-space: pre; }}
+  section {{ margin-top: 36px; }}
+  h2 {{
+    font-size: 13.5px; color: var(--accent); letter-spacing: 1px;
+    font-weight: 700; margin: 0 0 12px 0;
+  }}
+  h3 {{
+    font-size: 13.5px; color: var(--accent-dim); font-weight: 700;
+    margin: 26px 0 8px 0;
+  }}
+  .intro {{ color: var(--dim); margin: 0 0 14px 0; }}
+  nav {{
+    margin-top: 14px; color: var(--dim);
+    border-top: 1px dashed var(--hair); border-bottom: 1px dashed var(--hair);
+    padding: 8px 0;
+  }}
+  nav a {{ color: var(--dim); margin-right: 14px; text-decoration: none; }}
+  nav a:hover {{ color: var(--accent); }}
+  .scroll {{ overflow-x: auto; }}
+  .meta {{
+    color: var(--dim); margin-top: 56px; padding-top: 20px;
+    border-top: 1px dashed var(--hair); font-size: 12px;
+  }}
+  ::selection {{ background: var(--accent); color: var(--bg); }}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PYTHIA / trends</h1>
+  <div class="tag">// rolling and cumulative views across all clean days</div>
+  <div class="meta-top">rendered {rendered} · {n_days} clean days · {n_responses} responses</div>
+</header>
+
+<nav>
+  <a href="index.html">← back to dashboard</a>
+  <a href="#rolling7">last 7 days</a>
+  <a href="#rolling30">last 30 days</a>
+  <a href="#alltime">all-time</a>
+  <a href="#new">new this week</a>
+  <a href="#convergence">convergence</a>
+  <a href="#days">all days</a>
+  <a href="prompts.html">▸ prompts</a>
+</nav>
+
+<section id="rolling7">
+  <h2>▸ top tickers · last 7 days</h2>
+  <pre class="intro">{intro_rolling}</pre>
+  <div class="scroll"><pre class="tbl">{rolling_7d}</pre></div>
+</section>
+
+<section id="rolling30">
+  <h2>▸ top tickers · last 30 days</h2>
+  <div class="scroll"><pre class="tbl">{rolling_30d}</pre></div>
+</section>
+
+<section id="alltime">
+  <h2>▸ top tickers · all-time</h2>
+  <div class="scroll"><pre class="tbl">{rolling_all}</pre></div>
+</section>
+
+<section id="new">
+  <h2>▸ new this week</h2>
+  <pre class="intro">{intro_new}</pre>
+  <div class="scroll"><pre class="tbl">{new_this_week}</pre></div>
+</section>
+
+<section id="convergence">
+  <h2>▸ convergence — where claude + codex both push bullish</h2>
+  <pre class="intro">{intro_convergence}</pre>
+  <div class="scroll"><pre class="tbl">{convergence}</pre></div>
+</section>
+
+<section id="days">
+  <h2>▸ all clean days</h2>
+  <pre class="intro">{intro_days}</pre>
+  <div class="scroll"><pre class="tbl">{days_index}</pre></div>
+</section>
+
+<div class="meta"><pre>{footer}</pre></div>
 
 </body>
 </html>
@@ -891,27 +1306,60 @@ HTML_PROMPTS_TMPL = """<!doctype html>
 # ───────────────────────── main ─────────────────────────
 
 
-def render_day_nav(current: str, prev_day: str | None, next_day: str | None, is_index: bool) -> str:
-    """Build the prev/current/next strip for paging between day snapshots."""
-    def link(d: str | None, label: str) -> str:
-        if not d:
-            return "<span></span>"
-        href = f"day/{d}.html" if is_index else f"{d}.html"
-        return f'<a href="{html.escape(href)}">{html.escape(label)}</a>'
+def _day_href(day: str, is_index: bool) -> str:
+    return f"day/{day}.html" if is_index else f"{day}.html"
 
-    prev_html = link(prev_day, f"◀ {prev_day}") if prev_day else "<span></span>"
-    next_html = link(next_day, f"{next_day} ▶") if next_day else "<span></span>"
+
+def render_day_nav(current: str, days: list[str], is_index: bool) -> str:
+    """Render the prev/strip/next nav. `days` is the full clean-day list in
+    DESC order (latest first). Shows up to STRIP_LEN days centered around
+    `current` as a clickable date strip, plus ◀ ▶ arrows on either end."""
+    STRIP_LEN = 10
+    try:
+        idx = days.index(current)
+    except ValueError:
+        idx = 0
+
+    # Surrounding window of visible days. days is DESC, so older = higher idx.
+    end = min(len(days), idx + STRIP_LEN // 2 + 1)
+    start = max(0, end - STRIP_LEN)
+    if end - start < STRIP_LEN:
+        end = min(len(days), start + STRIP_LEN)
+    visible = days[start:end]                  # still DESC
+    visible_asc = list(reversed(visible))      # ASC for display (older → newer)
+
+    def short(d: str) -> str:
+        # YYYY-MM-DD → MM-DD
+        return d[5:] if len(d) >= 10 else d
+
+    def chip(d: str) -> str:
+        if d == current:
+            return f'<span class="day-current">[{html.escape(short(d))}]</span>'
+        return f'<a href="{html.escape(_day_href(d, is_index))}" title="{html.escape(d)}">{html.escape(short(d))}</a>'
+
+    strip = " ".join(chip(d) for d in visible_asc)
+
+    older = days[idx + 1] if idx + 1 < len(days) else None   # one step back in time
+    newer = days[idx - 1] if idx > 0 else None                # one step forward
+    older_html = (
+        f'<a href="{html.escape(_day_href(older, is_index))}" title="{html.escape(older)}">◀</a>'
+        if older else '<span class="dim">◀</span>'
+    )
+    newer_html = (
+        f'<a href="{html.escape(_day_href(newer, is_index))}" title="{html.escape(newer)}">▶</a>'
+        if newer else '<span class="dim">▶</span>'
+    )
+
     return (
         '<nav class="day-nav">'
-        f"{prev_html}"
-        f'<span class="day-current">▸ {html.escape(current)}</span>'
-        f"{next_html}"
+        f"{older_html}"
+        f'<span class="day-strip">{strip}</span>'
+        f"{newer_html}"
         "</nav>"
     )
 
 
-def render_main_page(d: dict, day: str, prev_day: str | None,
-                     next_day: str | None, is_index: bool) -> str:
+def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
     counts = d["counts"]
     intro_findings = INTRO_FINDINGS.format(
         n_runs=counts["n_runs"],
@@ -922,7 +1370,7 @@ def render_main_page(d: dict, day: str, prev_day: str | None,
     return HTML_TMPL.format(
         tagline=html.escape(TAGLINE),
         current_day=html.escape(day),
-        day_nav=render_day_nav(day, prev_day, next_day, is_index),
+        day_nav=render_day_nav(day, days, is_index),
         rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         panel_version=html.escape(panel_version),
         hero_chart=html.escape(render_hero_chart(d)),
@@ -974,11 +1422,9 @@ def main() -> int:
             return 0
 
         # Render every clean day as its own snapshot under dist/day/.
-        for i, day in enumerate(days):
+        for day in days:
             d = fetch(con, day=day)
-            prev_day = days[i + 1] if i + 1 < len(days) else None
-            next_day = days[i - 1] if i > 0 else None
-            page = render_main_page(d, day, prev_day, next_day, is_index=False)
+            page = render_main_page(d, day, days, is_index=False)
             day_path = day_dir / f"{day}.html"
             day_path.write_text(page, encoding="utf-8")
             print(f"wrote {day_path}  ({len(page)} bytes)")
@@ -986,15 +1432,61 @@ def main() -> int:
         # Index always reflects the latest clean day.
         latest = days[0]
         d_latest = fetch(con, day=latest)
-        prev_for_latest = days[1] if len(days) > 1 else None
-        index_page = render_main_page(d_latest, latest, prev_for_latest, None, is_index=True)
+        index_page = render_main_page(d_latest, latest, days, is_index=True)
         OUT_PATH.write_text(index_page, encoding="utf-8")
         print(f"wrote {OUT_PATH}  ({len(index_page)} bytes)  [index = {latest}]")
 
         # Prompts subpage uses global panel data (not day-scoped).
         d = fetch(con, day=None)
+
+        # Trends subpage — rolling / cumulative across all clean days.
+        trends = fetch_trends(con)
     finally:
         con.close()
+
+    # ── trends subpage ──
+    n_days = len(days)
+    n_responses = sum(r["n_responses"] or 0 for r in trends["days_index"])
+    trends_page = HTML_TRENDS_TMPL.format(
+        rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        n_days=n_days,
+        n_responses=n_responses,
+        intro_rolling=html.escape(
+            "rolling windows: top tickers ranked by net (bullish - bearish) "
+            "over the window. `days` is the count of distinct days the ticker "
+            "appeared (persistence). the trend sparkline covers the last 30 "
+            "clean days. when there's less than the window's worth of data, "
+            "values are just whatever is available."
+        ),
+        intro_new=html.escape(
+            "tickers whose very first appearance in any clean run was within "
+            "the last 7 days. signals 'something new' — e.g. an earnings "
+            "story emerged, a sector rotation, a model update introduced "
+            "fresh names. net_since aggregates all sentiment from first_seen "
+            "through now."
+        ),
+        intro_convergence=html.escape(
+            "tickers where BOTH claude and codex contributed bullish "
+            "mentions (across all clean days). cross-vendor agreement = "
+            "stronger signal that the recommendation flow is consensus, "
+            "not a quirk of one provider's training. verdict notes whether "
+            "either model also expressed bearish doubt."
+        ),
+        intro_days=html.escape(
+            "every clean run grouped by calendar day. click → to open that "
+            "day's snapshot. lead-pick column = the highest-net ticker for "
+            "the day."
+        ),
+        rolling_7d=html.escape(render_rolling_top(trends["top_7d"], "7 days")),
+        rolling_30d=html.escape(render_rolling_top(trends["top_30d"], "30 days")),
+        rolling_all=html.escape(render_rolling_top(trends["top_all"], "all-time")),
+        new_this_week=html.escape(render_new_this_week(trends["new_this_week"])),
+        convergence=html.escape(render_convergence(trends["convergence"])),
+        days_index=html.escape(render_days_index(trends["days_index"])),
+        footer=html.escape(FOOTER),
+    )
+    OUT_TRENDS_PATH.write_text(trends_page, encoding="utf-8")
+    print(f"wrote {OUT_TRENDS_PATH}  ({len(trends_page)} bytes)")
 
     # ── prompts subpage ──
     preamble = load_preamble()
