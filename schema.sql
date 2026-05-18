@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS runs (
   finished_at     TEXT,
   panel_version   TEXT    NOT NULL,           -- git short SHA of prompts/personas
   status          TEXT    NOT NULL DEFAULT 'running',  -- running | completed | partial | failed
+  is_clean        INTEGER NOT NULL DEFAULT 1, -- 1 = include in dashboard aggregates; 0 = smoke / contaminated / discarded
   notes           TEXT
 );
 

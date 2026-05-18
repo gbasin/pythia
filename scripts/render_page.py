@@ -94,9 +94,9 @@ why bother?
 
 
 INTRO_FINDINGS = """\
-pythia started recently — patterns will sharpen as more daily runs
-accumulate. {n_runs} runs · {n_responses} successful responses
-· {n_unique} unique tickers extracted so far."""
+this day: {n_runs} run(s) · {n_responses} successful responses ·
+{n_unique} unique tickers. use the day nav above to page back
+through earlier days."""
 
 
 INTRO_TOP_MENTIONS = """\
@@ -169,38 +169,92 @@ FOOTER = """\
 # ───────────────────────── data fetch ─────────────────────────
 
 
-def fetch(con) -> dict:
+def list_clean_days(con) -> list[str]:
+    """Distinct calendar days (UTC) that have at least one clean run."""
+    return [
+        r[0]
+        for r in con.execute(
+            """
+            SELECT DISTINCT DATE(started_at) AS day
+            FROM runs
+            WHERE is_clean = 1 AND status IN ('completed', 'partial')
+            ORDER BY day DESC
+            """
+        ).fetchall()
+    ]
+
+
+def fetch(con, day: str | None = None) -> dict:
+    """Return all dashboard data. If `day` is given, scope per-day aggregates
+    (counts, top_mentions, persona_delta, samples) to that date. Global panel
+    definitions (prompts, personas, model_configs) and the recent-runs table
+    are always cumulative across clean runs."""
     con.row_factory = sqlite3.Row
+
+    # Day filter snippets — applied wherever we touch responses/mentions.
+    if day:
+        day_pred = "AND DATE(ru.started_at) = ?"
+        day_params = (day,)
+    else:
+        day_pred = ""
+        day_params = ()
+
     counts = con.execute(
-        """
+        f"""
         SELECT
-            (SELECT COUNT(*) FROM runs)                                   AS n_runs,
-            (SELECT COUNT(*) FROM responses)                              AS n_responses_total,
-            (SELECT COUNT(*) FROM responses WHERE error IS NULL)          AS n_responses_ok,
-            (SELECT COUNT(*) FROM responses WHERE error IS NOT NULL)      AS n_responses_fail,
-            (SELECT COUNT(*) FROM responses WHERE refused=1)              AS n_refused,
-            (SELECT COUNT(*) FROM mentions)                               AS n_mentions,
-            (SELECT COUNT(DISTINCT ticker) FROM mentions)                 AS n_unique_tickers
-        """
+            (SELECT COUNT(*) FROM runs ru
+                WHERE ru.is_clean=1 {day_pred})                       AS n_runs,
+            (SELECT COUNT(*) FROM responses r
+                JOIN runs ru ON r.run_id = ru.id
+                WHERE ru.is_clean=1 AND r.error IS NULL {day_pred})   AS n_responses_ok,
+            (SELECT COUNT(*) FROM responses r
+                JOIN runs ru ON r.run_id = ru.id
+                WHERE ru.is_clean=1 AND r.error IS NOT NULL {day_pred}) AS n_responses_fail,
+            (SELECT COUNT(*) FROM responses r
+                JOIN runs ru ON r.run_id = ru.id
+                WHERE ru.is_clean=1 AND r.refused=1 {day_pred})       AS n_refused,
+            (SELECT COUNT(*) FROM mentions m
+                JOIN responses r ON m.response_id = r.id
+                JOIN runs ru ON r.run_id = ru.id
+                WHERE ru.is_clean=1 {day_pred})                       AS n_mentions,
+            (SELECT COUNT(DISTINCT m.ticker) FROM mentions m
+                JOIN responses r ON m.response_id = r.id
+                JOIN runs ru ON r.run_id = ru.id
+                WHERE ru.is_clean=1 {day_pred})                       AS n_unique_tickers
+        """,
+        day_params * 6,
     ).fetchone()
 
-    latest_run = con.execute(
-        "SELECT id, started_at, finished_at, status, panel_version FROM runs ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    # Latest clean run for the freshness stamp (per-day or global).
+    if day:
+        latest_run = con.execute(
+            "SELECT id, started_at, finished_at, status, panel_version "
+            "FROM runs WHERE is_clean=1 AND DATE(started_at)=? "
+            "ORDER BY id DESC LIMIT 1",
+            (day,),
+        ).fetchone()
+    else:
+        latest_run = con.execute(
+            "SELECT id, started_at, finished_at, status, panel_version "
+            "FROM runs WHERE is_clean=1 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
 
+    # Recent runs table is always global (operational footer).
     runs = con.execute(
         """
-        SELECT r.id, r.started_at, r.status,
+        SELECT r.id, r.started_at, r.status, r.is_clean,
                (SELECT COUNT(*) FROM responses WHERE run_id=r.id) AS n_total,
                (SELECT COUNT(*) FROM responses WHERE run_id=r.id AND error IS NULL) AS n_ok,
                (SELECT COUNT(*) FROM responses WHERE run_id=r.id AND error IS NOT NULL) AS n_fail,
                (SELECT COUNT(*) FROM responses WHERE run_id=r.id AND refused=1) AS n_refused
-        FROM runs r ORDER BY id DESC LIMIT 10
+        FROM runs r
+        WHERE r.is_clean = 1
+        ORDER BY r.id DESC LIMIT 10
         """
     ).fetchall()
 
     top_mentions = con.execute(
-        """
+        f"""
         SELECT m.ticker,
                COUNT(*)                                                          AS n,
                SUM(CASE WHEN m.sentiment_hint = 'bullish' THEN 1 ELSE 0 END)     AS bull,
@@ -213,24 +267,29 @@ def fetch(con) -> dict:
                AVG(m.position)                                                   AS avg_pos
         FROM mentions m
         JOIN responses r ON m.response_id = r.id
-        WHERE r.error IS NULL
+        JOIN runs ru ON r.run_id = ru.id
+        WHERE r.error IS NULL AND ru.is_clean = 1 {day_pred}
         GROUP BY m.ticker
         ORDER BY net DESC, n DESC, avg_pos ASC
         LIMIT 24
-        """
+        """,
+        day_params,
     ).fetchall()
 
     persona_delta = con.execute(
-        """
+        f"""
         SELECT m.ticker,
                SUM(CASE WHEN r.persona_id='speculator' THEN 1 ELSE 0 END) AS spec_n,
                SUM(CASE WHEN r.persona_id='allocator'  THEN 1 ELSE 0 END) AS alloc_n
-        FROM mentions m JOIN responses r ON m.response_id=r.id
-        WHERE r.error IS NULL
+        FROM mentions m
+        JOIN responses r ON m.response_id=r.id
+        JOIN runs ru ON r.run_id = ru.id
+        WHERE r.error IS NULL AND ru.is_clean = 1 {day_pred}
         GROUP BY m.ticker
         HAVING (spec_n + alloc_n) >= 1
         ORDER BY (spec_n - alloc_n) DESC, m.ticker
-        """
+        """,
+        day_params,
     ).fetchall()
 
     model_configs = con.execute(
@@ -267,7 +326,7 @@ def fetch(con) -> dict:
     ).fetchall()
 
     samples = con.execute(
-        """
+        f"""
         SELECT r.id            AS resp_id,
                r.started_at    AS started_at,
                r.tools_state   AS tools_state,
@@ -281,10 +340,13 @@ def fetch(con) -> dict:
                  WHERE id = r.prompt_id AND version_hash = r.prompt_version_hash) AS prompt_text
         FROM responses r
         JOIN model_configs mc ON r.model_config_id = mc.id
+        JOIN runs ru ON r.run_id = ru.id
         WHERE r.error IS NULL AND r.raw_text IS NOT NULL AND LENGTH(r.raw_text) > 100
+              AND ru.is_clean = 1 {day_pred}
         ORDER BY r.id DESC
         LIMIT 6
-        """
+        """,
+        day_params,
     ).fetchall()
 
     samples_enriched = []
@@ -511,7 +573,7 @@ HTML_TMPL = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>pythia — what AIs tell people to buy</title>
+<title>pythia — {current_day}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root {{
@@ -571,6 +633,21 @@ HTML_TMPL = """<!doctype html>
   }}
   nav a {{ color: var(--dim); margin-right: 14px; text-decoration: none; }}
   nav a:hover {{ color: var(--accent); }}
+  nav.day-nav {{
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 14px;
+    padding: 10px 0;
+    border-top: 1px dashed var(--hair);
+    border-bottom: 1px dashed var(--hair);
+  }}
+  nav.day-nav a {{ margin-right: 0; }}
+  nav.day-nav .day-current {{
+    color: var(--accent);
+    font-weight: 700;
+    letter-spacing: 1px;
+  }}
   .meta {{
     color: var(--dim);
     margin-top: 56px;
@@ -588,6 +665,8 @@ HTML_TMPL = """<!doctype html>
   <div class="tag">// {tagline}</div>
   <div class="meta-top">rendered {rendered} · panel_version {panel_version}</div>
 </header>
+
+{day_nav}
 
 <nav>
   <a href="#findings">what we found</a>
@@ -764,17 +843,27 @@ HTML_PROMPTS_TMPL = """<!doctype html>
 # ───────────────────────── main ─────────────────────────
 
 
-def main() -> int:
-    if not DB_PATH.exists():
-        print(f"db missing: {DB_PATH}")
-        return 1
-    OUT_PATH.parent.mkdir(exist_ok=True)
-    con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-    try:
-        d = fetch(con)
-    finally:
-        con.close()
+def render_day_nav(current: str, prev_day: str | None, next_day: str | None, is_index: bool) -> str:
+    """Build the prev/current/next strip for paging between day snapshots."""
+    def link(d: str | None, label: str) -> str:
+        if not d:
+            return "<span></span>"
+        href = f"day/{d}.html" if is_index else f"{d}.html"
+        return f'<a href="{html.escape(href)}">{html.escape(label)}</a>'
 
+    prev_html = link(prev_day, f"◀ {prev_day}") if prev_day else "<span></span>"
+    next_html = link(next_day, f"{next_day} ▶") if next_day else "<span></span>"
+    return (
+        '<nav class="day-nav">'
+        f"{prev_html}"
+        f'<span class="day-current">▸ {html.escape(current)}</span>'
+        f"{next_html}"
+        "</nav>"
+    )
+
+
+def render_main_page(d: dict, day: str, prev_day: str | None,
+                     next_day: str | None, is_index: bool) -> str:
     counts = d["counts"]
     intro_findings = INTRO_FINDINGS.format(
         n_runs=counts["n_runs"],
@@ -782,9 +871,10 @@ def main() -> int:
         n_unique=counts["n_unique_tickers"],
     )
     panel_version = d["latest_run"]["panel_version"] if d["latest_run"] else "—"
-
-    page = HTML_TMPL.format(
+    return HTML_TMPL.format(
         tagline=html.escape(TAGLINE),
+        current_day=html.escape(day),
+        day_nav=render_day_nav(day, prev_day, next_day, is_index),
         rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         panel_version=html.escape(panel_version),
         hero=html.escape(HERO),
@@ -808,12 +898,57 @@ def main() -> int:
         db_rel=html.escape(str(DB_PATH.relative_to(ROOT))),
         root=html.escape(str(ROOT)),
     )
-    OUT_PATH.write_text(page, encoding="utf-8")
-    print(f"wrote {OUT_PATH}  ({len(page)} bytes)")
+
+
+def main() -> int:
+    if not DB_PATH.exists():
+        print(f"db missing: {DB_PATH}")
+        return 1
+    out_dir = OUT_PATH.parent
+    day_dir = out_dir / "day"
+    out_dir.mkdir(exist_ok=True)
+    day_dir.mkdir(exist_ok=True)
+
+    con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    try:
+        days = list_clean_days(con)
+        if not days:
+            placeholder = (
+                "<!doctype html><html><head><meta charset=\"utf-8\">"
+                "<title>pythia</title></head><body style=\"background:#0a0a0a;"
+                "color:#e6e4dd;font-family:monospace;padding:40px;\">"
+                "<pre>no clean runs yet — pythia is collecting.</pre>"
+                "</body></html>"
+            )
+            OUT_PATH.write_text(placeholder, encoding="utf-8")
+            print(f"wrote {OUT_PATH} (no clean days yet)")
+            return 0
+
+        # Render every clean day as its own snapshot under dist/day/.
+        for i, day in enumerate(days):
+            d = fetch(con, day=day)
+            prev_day = days[i + 1] if i + 1 < len(days) else None
+            next_day = days[i - 1] if i > 0 else None
+            page = render_main_page(d, day, prev_day, next_day, is_index=False)
+            day_path = day_dir / f"{day}.html"
+            day_path.write_text(page, encoding="utf-8")
+            print(f"wrote {day_path}  ({len(page)} bytes)")
+
+        # Index always reflects the latest clean day.
+        latest = days[0]
+        d_latest = fetch(con, day=latest)
+        prev_for_latest = days[1] if len(days) > 1 else None
+        index_page = render_main_page(d_latest, latest, prev_for_latest, None, is_index=True)
+        OUT_PATH.write_text(index_page, encoding="utf-8")
+        print(f"wrote {OUT_PATH}  ({len(index_page)} bytes)  [index = {latest}]")
+
+        # Prompts subpage uses global panel data (not day-scoped).
+        d = fetch(con, day=None)
+    finally:
+        con.close()
 
     # ── prompts subpage ──
     preamble = load_preamble()
-    # Pick an illustrative tuple — portfolio_01 × speculator.
     example_prompt = next((p for p in d["prompts"] if p["id"] == "portfolio_01"),
                           d["prompts"][0] if d["prompts"] else None)
     example_persona = next((p for p in d["personas"] if p["id"] == "speculator"),
