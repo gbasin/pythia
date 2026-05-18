@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["pyyaml>=6.0"]
 # ///
 """Render AI-Rec-Panel state to a static HTML page.
 
@@ -20,9 +20,43 @@ import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "db" / "panel.sqlite"
+PROMPTS_YAML_PATH = ROOT / "prompts.yaml"
 OUT_PATH = ROOT / "dist" / "index.html"
+OUT_PROMPTS_PATH = ROOT / "dist" / "prompts.html"
+
+# Mirrors TOOLS_OFF_SUFFIX in scripts/run_panel.py — duplicated so the
+# review page can show the exact text models see for tools_off runs.
+TOOLS_OFF_SUFFIX = (
+    "IMPORTANT: For this query, you may NOT use any web search, browser, "
+    "or external lookup tools. Answer entirely from your training data. "
+    "If your information is stale, say so and proceed anyway with the "
+    "best answer you can give from what you know."
+)
+
+
+def load_preamble() -> str:
+    try:
+        with PROMPTS_YAML_PATH.open() as f:
+            data = yaml.safe_load(f) or {}
+        return (data.get("preamble") or "").strip()
+    except Exception:
+        return ""
+
+
+def assemble_example(persona_desc: str, prompt_text: str, preamble: str, tools_state: str) -> str:
+    """Mirrors assemble_prompt() in run_panel.py — the literal string the CLI receives on stdin."""
+    parts = [
+        f"About me:\n{persona_desc.strip()}",
+        preamble.strip(),
+    ]
+    if tools_state == "off":
+        parts.append(TOOLS_OFF_SUFFIX)
+    parts.append(f"Question:\n{prompt_text.strip()}")
+    return "\n\n".join(parts) + "\n"
 
 
 # ───────────────────────── narrative copy ─────────────────────────
@@ -608,6 +642,7 @@ HTML_TMPL = """<!doctype html>
   <a href="#samples">see for yourself</a>
   <a href="#how">how it works</a>
   <a href="#ops">operational</a>
+  <a href="prompts.html">▸ review prompts</a>
 </nav>
 
 <section id="hero">
@@ -677,6 +712,114 @@ HTML_TMPL = """<!doctype html>
 """
 
 
+HTML_PROMPTS_TMPL = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pythia — prompts (review)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {{
+    --bg: #0a0a0a;
+    --fg: #e6e4dd;
+    --dim: #7a766b;
+    --accent: #6ad08a;
+    --accent-dim: #4a9263;
+    --hair: #1a1a1a;
+  }}
+  html, body {{ background: var(--bg); color: var(--fg); margin: 0; padding: 0; }}
+  body {{
+    font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace,
+                 SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13.5px;
+    line-height: 1.62;
+    padding: 40px 24px 80px;
+    max-width: 920px;
+    margin: 0 auto;
+  }}
+  header {{ margin-bottom: 6px; }}
+  h1 {{ font-size: 13.5px; margin: 0; letter-spacing: 2px; font-weight: 700; }}
+  .tag {{ color: var(--dim); }}
+  .meta-top {{ color: var(--dim); font-size: 12px; margin-top: 6px; }}
+  pre {{ margin: 0; white-space: pre-wrap; word-break: keep-all; }}
+  pre.tbl {{ white-space: pre; }}
+  section {{ margin-top: 36px; }}
+  h2 {{
+    font-size: 13.5px; color: var(--accent); letter-spacing: 1px;
+    font-weight: 700; margin: 0 0 12px 0;
+  }}
+  h3 {{
+    font-size: 13.5px; color: var(--accent-dim); font-weight: 700;
+    margin: 26px 0 8px 0;
+  }}
+  .intro {{ color: var(--dim); margin: 0 0 14px 0; }}
+  nav {{
+    margin-top: 14px; color: var(--dim);
+    border-top: 1px dashed var(--hair);
+    border-bottom: 1px dashed var(--hair);
+    padding: 8px 0;
+  }}
+  nav a {{ color: var(--dim); margin-right: 14px; text-decoration: none; }}
+  nav a:hover {{ color: var(--accent); }}
+  .meta {{
+    color: var(--dim); margin-top: 56px; padding-top: 20px;
+    border-top: 1px dashed var(--hair); font-size: 12px;
+  }}
+  ::selection {{ background: var(--accent); color: var(--bg); }}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PYTHIA / prompts</h1>
+  <div class="tag">// the exact text claude opus + gpt-5.5 see, every run</div>
+  <div class="meta-top">rendered {rendered}</div>
+</header>
+
+<nav>
+  <a href="index.html">← back to dashboard</a>
+</nav>
+
+<section>
+  <h2>▸ how a prompt is assembled</h2>
+  <pre class="intro">{assembly_intro}</pre>
+  <h3>example: portfolio_01 × speculator × tools_on</h3>
+  <div class="scroll"><pre>{assembled_on}</pre></div>
+  <h3>example: same prompt, tools_off variant (extra suffix appears)</h3>
+  <div class="scroll"><pre>{assembled_off}</pre></div>
+</section>
+
+<section>
+  <h2>▸ preamble  (applied to every prompt, after the persona)</h2>
+  <pre class="intro">{preamble_intro}</pre>
+  <div class="scroll"><pre>{preamble_block}</pre></div>
+</section>
+
+<section>
+  <h2>▸ tools-off suffix  (appended only for tools_off variants)</h2>
+  <pre class="intro">{tools_off_intro}</pre>
+  <div class="scroll"><pre>{tools_off_block}</pre></div>
+</section>
+
+<section>
+  <h2>▸ personas  (injected as &quot;about me&quot; context)</h2>
+  <pre class="intro">{personas_intro}</pre>
+  <div class="scroll"><pre>{personas_full}</pre></div>
+</section>
+
+<section>
+  <h2>▸ the 10 questions  (full text, no truncation)</h2>
+  <pre class="intro">{prompts_intro}</pre>
+  <div class="scroll"><pre>{prompts_full}</pre></div>
+</section>
+
+<div class="meta"><pre>{footer}</pre></div>
+
+</body>
+</html>
+"""
+
+
 # ───────────────────────── main ─────────────────────────
 
 
@@ -728,6 +871,65 @@ def main() -> int:
     )
     OUT_PATH.write_text(page, encoding="utf-8")
     print(f"wrote {OUT_PATH}  ({len(page)} bytes)")
+
+    # ── prompts subpage ──
+    preamble = load_preamble()
+    # Pick an illustrative tuple — portfolio_01 × speculator.
+    example_prompt = next((p for p in d["prompts"] if p["id"] == "portfolio_01"),
+                          d["prompts"][0] if d["prompts"] else None)
+    example_persona = next((p for p in d["personas"] if p["id"] == "speculator"),
+                           d["personas"][0] if d["personas"] else None)
+    if example_prompt and example_persona and preamble:
+        assembled_on = assemble_example(
+            example_persona["description"], example_prompt["text"], preamble, "on"
+        )
+        assembled_off = assemble_example(
+            example_persona["description"], example_prompt["text"], preamble, "off"
+        )
+    else:
+        assembled_on = "(unavailable — db missing prompts or personas)"
+        assembled_off = "(unavailable)"
+
+    prompts_page = HTML_PROMPTS_TMPL.format(
+        rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        assembly_intro=html.escape(
+            "every CLI invocation receives one assembled string via stdin: the "
+            "persona context, then the global preamble, then (for tools_off "
+            "variants only) the tools-off suffix, then the actual question. "
+            "below is the literal text the model sees for one example tuple."
+        ),
+        assembled_on=html.escape(assembled_on),
+        assembled_off=html.escape(assembled_off),
+        preamble_intro=html.escape(
+            "instructs every model to ground its answer in current market "
+            "state and to prefix every ticker with $ so extraction is "
+            "deterministic. identical across all variants."
+        ),
+        preamble_block=html.escape("  " + preamble.replace("\n", "\n  ") if preamble else "(missing)"),
+        tools_off_intro=html.escape(
+            "for tools_off model variants only. claude's --tools \"\" hard-"
+            "disables web search at the CLI; codex has no such flag, so this "
+            "prompt instruction is the only lever. verified zero web_search "
+            "events in codex tools_off traces."
+        ),
+        tools_off_block=html.escape("  " + TOOLS_OFF_SUFFIX),
+        personas_intro=html.escape(
+            "these two descriptions are injected as 'about me:' context "
+            "before every question. they bracket the spectrum of who is "
+            "plausibly asking an AI for investment advice."
+        ),
+        personas_full=html.escape(render_personas(d)),
+        prompts_intro=html.escape(
+            "10 questions, asked verbatim each run. some deliberately name "
+            "tickers (NVDA, TSLA) — those mirror real retail queries, and "
+            "the volume the model returns on those names is the recommendation "
+            "flow we want to measure."
+        ),
+        prompts_full=html.escape(render_prompts(d)),
+        footer=html.escape(FOOTER),
+    )
+    OUT_PROMPTS_PATH.write_text(prompts_page, encoding="utf-8")
+    print(f"wrote {OUT_PROMPTS_PATH}  ({len(prompts_page)} bytes)")
     return 0
 
 
