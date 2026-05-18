@@ -65,7 +65,7 @@ def assemble_example(persona_desc: str, prompt_text: str, preamble: str, tools_s
 TAGLINE = "what frontier AI models tell people to buy, captured daily"
 
 HERO = """\
-every day at 4:30 PM ET, pythia asks claude opus 4.7 and gpt-5.5
+every night at 8 PM ET, pythia asks claude opus 4.7 and gpt-5.5
 what stocks to buy. 10 questions × 2 personas × 2 models = 40
 calls per run. every $TICKER the model mentions is labeled
 (bullish / bearish / neutral / context) by a smaller LLM. the

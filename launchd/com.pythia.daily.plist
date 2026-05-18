@@ -10,11 +10,12 @@
     <string>/Users/garybasin/Code/pythia/scripts/daily_run.sh</string>
   </array>
 
-  <!-- 4:30pm local time. User is on ET, so this is 4:30pm ET (post-close). -->
+  <!-- 8:00 PM local time. User is on ET, so this is 8:00 PM ET nightly
+       (well after US close, with all evening earnings prints filed). -->
   <key>StartCalendarInterval</key>
   <dict>
-    <key>Hour</key><integer>16</integer>
-    <key>Minute</key><integer>30</integer>
+    <key>Hour</key><integer>20</integer>
+    <key>Minute</key><integer>0</integer>
   </dict>
 
   <!-- Do not fire when the plist is first loaded. -->
