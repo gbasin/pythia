@@ -64,12 +64,14 @@ def assemble_example(persona_desc: str, prompt_text: str, preamble: str, tools_s
 
 TAGLINE = "what frontier AI models tell people to buy, captured daily"
 
-HERO = """\
-every night at 8 PM ET, pythia asks claude opus 4.7 and gpt-5.5
-what stocks to buy. 10 questions × 2 personas × 2 models = 40
-calls per run. every $TICKER the model mentions is labeled
-(bullish / bearish / neutral / context) by a smaller LLM. the
-chart below is the net flow: bullish - bearish across the panel."""
+CAPTION = """\
+every night at 8 PM ET, pythia asks claude opus 4.7 and gpt-5.5 what
+stocks to buy. 10 questions × 2 personas × 2 models = 40 calls. each
+$TICKER they name is labeled (bullish / bearish / neutral / context)
+by a smaller LLM. the chart above is the net (bullish − bearish) per
+ticker across this day's panel. scroll for the full breakdown."""
+
+HERO = CAPTION  # legacy alias — render_main_page now uses CAPTION directly
 
 
 WHY = """\
@@ -416,6 +418,25 @@ def indent2(text: str) -> str:
 # ───────────────────────── section renderers ─────────────────────────
 
 
+def render_hero_chart(d: dict) -> str:
+    """Big, minimalist version of the top-mentions chart for the page hero.
+    Just ticker + net + a wide signed bar. Top 15 only. The full table with
+    bull/bear/neut/ctx columns lives below as 'details'."""
+    rows = d["top_mentions"][:15]
+    if not rows:
+        return "\n     (no clean data for this day yet — run the panel)\n"
+    max_abs_net = max((abs(r["net"] or 0) for r in rows), default=0) or 1
+    HALF = 28
+    lines = [""]
+    for r in rows:
+        net = r["net"] or 0
+        sign = "+" if net > 0 else ("-" if net < 0 else " ")
+        bar_str = signed_bar(net, max_abs_net, half_width=HALF)
+        lines.append(f"  ${r['ticker']:<5}  {sign}{abs(net):<3}   {bar_str}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_top_mentions(d: dict) -> str:
     rows = d["top_mentions"]
     if not rows:
@@ -648,6 +669,30 @@ HTML_TMPL = """<!doctype html>
     font-weight: 700;
     letter-spacing: 1px;
   }}
+  .hero-chart {{
+    margin: 28px 0 18px;
+    padding: 22px 0;
+    border-top: 2px solid var(--accent);
+    border-bottom: 2px solid var(--accent);
+  }}
+  .hero-chart .label {{
+    color: var(--accent);
+    font-weight: 700;
+    letter-spacing: 2px;
+    margin-bottom: 6px;
+    text-align: center;
+  }}
+  .hero-chart pre {{
+    font-size: 14px;
+    line-height: 1.55;
+    white-space: pre;
+    overflow-x: auto;
+  }}
+  .caption {{
+    color: var(--dim);
+    margin: 18px 0 30px;
+    line-height: 1.6;
+  }}
   .meta {{
     color: var(--dim);
     margin-top: 56px;
@@ -668,8 +713,15 @@ HTML_TMPL = """<!doctype html>
 
 {day_nav}
 
+<section class="hero-chart">
+  <div class="label">NET AI RECOMMENDATION FLOW · {current_day}</div>
+  <div class="scroll"><pre>{hero_chart}</pre></div>
+</section>
+
+<div class="caption">{caption}</div>
+
 <nav>
-  <a href="#findings">what we found</a>
+  <a href="#findings">details</a>
   <a href="#samples">see for yourself</a>
   <a href="#why">why</a>
   <a href="#how">how it works</a>
@@ -677,15 +729,11 @@ HTML_TMPL = """<!doctype html>
   <a href="prompts.html">▸ review prompts</a>
 </nav>
 
-<section id="hero">
-  <pre>{hero}</pre>
-</section>
-
 <section id="findings">
-  <h2>▸ what we found</h2>
+  <h2>▸ details</h2>
   <pre class="intro">{intro_findings}</pre>
 
-  <h3>net recommendation flow per ticker</h3>
+  <h3>full breakdown — bull / bear / neut / ctx per ticker</h3>
   <pre class="intro">{intro_top_mentions}</pre>
   <div class="scroll"><pre class="tbl">{top_mentions}</pre></div>
 
@@ -877,7 +925,8 @@ def render_main_page(d: dict, day: str, prev_day: str | None,
         day_nav=render_day_nav(day, prev_day, next_day, is_index),
         rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         panel_version=html.escape(panel_version),
-        hero=html.escape(HERO),
+        hero_chart=html.escape(render_hero_chart(d)),
+        caption=html.escape(CAPTION),
         why=html.escape(WHY),
         intro_findings=html.escape(intro_findings),
         intro_top_mentions=html.escape(INTRO_TOP_MENTIONS),
