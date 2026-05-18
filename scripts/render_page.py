@@ -65,16 +65,11 @@ def assemble_example(persona_desc: str, prompt_text: str, preamble: str, tools_s
 TAGLINE = "what frontier AI models tell people to buy, captured daily"
 
 HERO = """\
-every day at 4:30 PM ET, we ask the world's most powerful AI
-models what stocks to buy — and publish, verbatim, what they say.
-
-we vary four things, 80 times per day:
-
-    10 questions   ·   2 personas   ·   2 models   ·   2 tool states
-
-over time, patterns emerge: the tickers the models reach for first,
-the ones they only mention with web search on, the ones they only
-pitch to speculators — never to professional allocators."""
+every day at 4:30 PM ET, pythia asks claude opus 4.7 and gpt-5.5
+what stocks to buy. 10 questions × 2 personas × 2 models = 40
+calls per run. every $TICKER the model mentions is labeled
+(bullish / bearish / neutral / context) by a smaller LLM. the
+chart below is the net flow: bullish - bearish across the panel."""
 
 
 WHY = """\
@@ -125,17 +120,6 @@ retail questions, and the volume of recommendation retail receives
 on those names is the signal we're capturing."""
 
 
-INTRO_TOOLS_DELTA = """\
-one of the four model variants we run has web search disabled —
-the model must answer from its training data alone. cutoffs:
-claude opus 4.7 ≈ january 2026, gpt-5.5 ≈ june 2024.
-
-delta = (tools_on count) − (tools_off count). positive means the
-ticker comes up more when the model can search the web. negative
-means it's primarily a training-data favorite — what the model
-"remembers" liking, regardless of where the stock trades today."""
-
-
 INTRO_PERSONA_DELTA = """\
 the same 10 questions get asked twice per model: once as an
 aggressive 28-year-old speculator hunting the next 10×, once as
@@ -170,12 +154,10 @@ based on who it thinks is listening."""
 
 
 INTRO_MODELS = """\
-two models, four configurations. each model is invoked through
-its coding-agent CLI harness — claude code for claude, codex CLI
-for gpt. consumer chat surfaces (chatgpt.com, claude.ai) are
-deferred to a later version. "tools_on" enables web search; the
-two "tools_off" variants forbid it (claude via hard flag, codex
-via prompt injection — verified zero web_search events in trace)."""
+two models, one config each. each is invoked through its coding-
+agent CLI harness — claude code for claude, codex CLI for gpt —
+with web search enabled by default. consumer chat surfaces
+(chatgpt.com, claude.ai) are deferred to a later version."""
 
 
 FOOTER = """\
@@ -235,19 +217,6 @@ def fetch(con) -> dict:
         GROUP BY m.ticker
         ORDER BY net DESC, n DESC, avg_pos ASC
         LIMIT 24
-        """
-    ).fetchall()
-
-    tool_delta = con.execute(
-        """
-        SELECT m.ticker,
-               SUM(CASE WHEN r.tools_state='on'  THEN 1 ELSE 0 END) AS on_n,
-               SUM(CASE WHEN r.tools_state='off' THEN 1 ELSE 0 END) AS off_n
-        FROM mentions m JOIN responses r ON m.response_id=r.id
-        WHERE r.error IS NULL
-        GROUP BY m.ticker
-        HAVING (on_n + off_n) >= 1
-        ORDER BY (on_n - off_n) DESC, m.ticker
         """
     ).fetchall()
 
@@ -331,7 +300,6 @@ def fetch(con) -> dict:
         latest_run=latest_run,
         runs=runs,
         top_mentions=top_mentions,
-        tool_delta=tool_delta,
         persona_delta=persona_delta,
         model_configs=model_configs,
         prompts=prompts,
@@ -403,21 +371,6 @@ def render_top_mentions(d: dict) -> str:
             f"{r['neut']:>3}  {r['ctx']:>3}  {sign}{abs(net):<3}  {r['n']:>3}   "
             f"{r['avg_pos']:>4.1f}        {signed_bar(net, max_abs_net)}"
         )
-    return "\n".join(lines)
-
-
-def render_tool_delta(d: dict) -> str:
-    rows = d["tool_delta"]
-    if not rows:
-        return "  (no data yet)"
-    lines = ["  ticker   tools_on  tools_off  delta"]
-    lines.append("  ------   --------  ---------  ─────")
-    for r in rows[:20]:
-        on_n = r["on_n"] or 0
-        off_n = r["off_n"] or 0
-        delta = on_n - off_n
-        sign = "+" if delta > 0 else ("-" if delta < 0 else " ")
-        lines.append(f"  ${r['ticker']:<5}    {on_n:>5}      {off_n:>5}     {sign}{abs(delta)}")
     return "\n".join(lines)
 
 
@@ -637,9 +590,9 @@ HTML_TMPL = """<!doctype html>
 </header>
 
 <nav>
-  <a href="#why">why</a>
   <a href="#findings">what we found</a>
   <a href="#samples">see for yourself</a>
+  <a href="#why">why</a>
   <a href="#how">how it works</a>
   <a href="#ops">operational</a>
   <a href="prompts.html">▸ review prompts</a>
@@ -649,22 +602,13 @@ HTML_TMPL = """<!doctype html>
   <pre>{hero}</pre>
 </section>
 
-<section id="why">
-  <h2>▸ why this exists</h2>
-  <pre>{why}</pre>
-</section>
-
 <section id="findings">
-  <h2>▸ what the data shows</h2>
+  <h2>▸ what we found</h2>
   <pre class="intro">{intro_findings}</pre>
 
-  <h3>tickers the models recommend most often</h3>
+  <h3>net recommendation flow per ticker</h3>
   <pre class="intro">{intro_top_mentions}</pre>
   <div class="scroll"><pre class="tbl">{top_mentions}</pre></div>
-
-  <h3>does web search change the answer?</h3>
-  <pre class="intro">{intro_tools_delta}</pre>
-  <div class="scroll"><pre class="tbl">{tool_delta}</pre></div>
 
   <h3>does it matter who's asking?</h3>
   <pre class="intro">{intro_persona_delta}</pre>
@@ -675,6 +619,11 @@ HTML_TMPL = """<!doctype html>
   <h2>▸ see for yourself</h2>
   <pre class="intro">{intro_samples}</pre>
   <div class="scroll"><pre>{samples}</pre></div>
+</section>
+
+<section id="why">
+  <h2>▸ why this exists</h2>
+  <pre>{why}</pre>
 </section>
 
 <section id="how">
@@ -783,22 +732,14 @@ HTML_PROMPTS_TMPL = """<!doctype html>
 <section>
   <h2>▸ how a prompt is assembled</h2>
   <pre class="intro">{assembly_intro}</pre>
-  <h3>example: portfolio_01 × speculator × tools_on</h3>
+  <h3>example: portfolio_01 × speculator</h3>
   <div class="scroll"><pre>{assembled_on}</pre></div>
-  <h3>example: same prompt, tools_off variant (extra suffix appears)</h3>
-  <div class="scroll"><pre>{assembled_off}</pre></div>
 </section>
 
 <section>
   <h2>▸ preamble  (applied to every prompt, after the persona)</h2>
   <pre class="intro">{preamble_intro}</pre>
   <div class="scroll"><pre>{preamble_block}</pre></div>
-</section>
-
-<section>
-  <h2>▸ tools-off suffix  (appended only for tools_off variants)</h2>
-  <pre class="intro">{tools_off_intro}</pre>
-  <div class="scroll"><pre>{tools_off_block}</pre></div>
 </section>
 
 <section>
@@ -850,14 +791,12 @@ def main() -> int:
         why=html.escape(WHY),
         intro_findings=html.escape(intro_findings),
         intro_top_mentions=html.escape(INTRO_TOP_MENTIONS),
-        intro_tools_delta=html.escape(INTRO_TOOLS_DELTA),
         intro_persona_delta=html.escape(INTRO_PERSONA_DELTA),
         intro_samples=html.escape(INTRO_SAMPLES),
         intro_prompts=html.escape(INTRO_PROMPTS),
         intro_personas=html.escape(INTRO_PERSONAS),
         intro_models=html.escape(INTRO_MODELS),
         top_mentions=html.escape(render_top_mentions(d)),
-        tool_delta=html.escape(render_tool_delta(d)),
         persona_delta=html.escape(render_persona_delta(d)),
         samples=html.escape(render_samples(d)),
         prompts=html.escape(render_prompts(d)),
@@ -883,36 +822,24 @@ def main() -> int:
         assembled_on = assemble_example(
             example_persona["description"], example_prompt["text"], preamble, "on"
         )
-        assembled_off = assemble_example(
-            example_persona["description"], example_prompt["text"], preamble, "off"
-        )
     else:
         assembled_on = "(unavailable — db missing prompts or personas)"
-        assembled_off = "(unavailable)"
 
     prompts_page = HTML_PROMPTS_TMPL.format(
         rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         assembly_intro=html.escape(
-            "every CLI invocation receives one assembled string via stdin: the "
-            "persona context, then the global preamble, then (for tools_off "
-            "variants only) the tools-off suffix, then the actual question. "
-            "below is the literal text the model sees for one example tuple."
+            "every CLI invocation receives one assembled string via stdin: "
+            "the persona context, then the global preamble, then the actual "
+            "question. below is the literal text the model sees for one "
+            "example tuple."
         ),
         assembled_on=html.escape(assembled_on),
-        assembled_off=html.escape(assembled_off),
         preamble_intro=html.escape(
             "instructs every model to ground its answer in current market "
             "state and to prefix every ticker with $ so extraction is "
-            "deterministic. identical across all variants."
+            "deterministic. identical across every model + persona."
         ),
         preamble_block=html.escape("  " + preamble.replace("\n", "\n  ") if preamble else "(missing)"),
-        tools_off_intro=html.escape(
-            "for tools_off model variants only. claude's --tools \"\" hard-"
-            "disables web search at the CLI; codex has no such flag, so this "
-            "prompt instruction is the only lever. verified zero web_search "
-            "events in codex tools_off traces."
-        ),
-        tools_off_block=html.escape("  " + TOOLS_OFF_SUFFIX),
         personas_intro=html.escape(
             "these two descriptions are injected as 'about me:' context "
             "before every question. they bracket the spectrum of who is "
