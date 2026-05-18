@@ -18,10 +18,12 @@ cd "$PROJECT_DIR"
   echo
   echo "=== panel run started $(date -u +'%Y-%m-%dT%H:%M:%SZ') ($(date +'%H:%M %Z')) ==="
   echo "PATH=$PATH"
-  /opt/homebrew/bin/uv run scripts/run_panel.py
+  # `|| true` so partial failures don't abort the chain — failures are
+  # recorded as error rows in the DB and the run row gets status='partial'.
+  /opt/homebrew/bin/uv run scripts/run_panel.py || true
   echo "=== panel run finished $(date -u +'%Y-%m-%dT%H:%M:%SZ') ==="
   echo "--- classifying sentiment ---"
-  /opt/homebrew/bin/uv run scripts/classify_mentions.py
+  /opt/homebrew/bin/uv run scripts/classify_mentions.py || true
   echo "--- rendering dashboard ---"
   /opt/homebrew/bin/uv run scripts/render_page.py
 } >> "$LOG" 2>&1

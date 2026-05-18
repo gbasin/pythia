@@ -22,6 +22,7 @@ import gzip
 import hashlib
 import json
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -37,6 +38,20 @@ PERSONAS_PATH = ROOT / "personas.yaml"
 PROMPTS_PATH = ROOT / "prompts.yaml"
 MODEL_CONFIGS_PATH = ROOT / "model_configs.yaml"
 NEUTRAL_CWD = "/tmp"  # avoid loading CLAUDE.md / project memory from a real repo
+
+# Claude Code's auto-memory subsystem writes "user facts" and "feedback"
+# memories that persist across invocations rooted in the same cwd. With
+# our NEUTRAL_CWD=/tmp, every claude call shares this dir — meaning facts
+# inferred from one persona's response leak into subsequent runs of other
+# personas. We nuke this dir before every claude call to keep each
+# (prompt × persona × model) tuple genuinely independent.
+CLAUDE_MEMORY_DIR = Path.home() / ".claude" / "projects" / "-private-tmp" / "memory"
+
+
+def nuke_claude_memory() -> None:
+    """Remove any auto-memory left over from a prior claude invocation."""
+    if CLAUDE_MEMORY_DIR.exists():
+        shutil.rmtree(CLAUDE_MEMORY_DIR, ignore_errors=True)
 
 
 def short_hash(text: str) -> str:
@@ -211,6 +226,10 @@ def run_one(model_config: dict, full_prompt: str, timeout: int) -> dict:
     # prompt is supplied (codex requires "-" or no prompt arg for this).
     # Piping via stdin avoids quoting/parsing issues with flags like
     # `--tools ""` (claude) or multi-line prompts.
+    if model_config["provider"] == "claude":
+        # Per-call isolation: prevent claude's auto-memory from leaking
+        # persona/feedback context across tuples.
+        nuke_claude_memory()
     cmd = [model_config["cli_command"]]
     if model_config.get("subcommand"):
         cmd.append(model_config["subcommand"])
