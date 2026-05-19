@@ -1094,6 +1094,138 @@ HTML_TMPL = """<!doctype html>
 """
 
 
+HTML_INDEX_TMPL = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pythia — {current_day}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {{
+    --bg: #0a0a0a; --fg: #e6e4dd; --dim: #7a766b;
+    --accent: #6ad08a; --accent-dim: #4a9263; --hair: #1a1a1a;
+  }}
+  html, body {{ background: var(--bg); color: var(--fg); margin: 0; padding: 0; }}
+  body {{
+    font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace,
+                 SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13.5px; line-height: 1.62;
+    padding: 40px 24px 80px; max-width: 1000px; margin: 0 auto;
+  }}
+  header {{ margin-bottom: 6px; }}
+  h1 {{ font-size: 13.5px; margin: 0; letter-spacing: 2px; font-weight: 700; }}
+  .tag {{ color: var(--dim); }}
+  .meta-top {{ color: var(--dim); font-size: 12px; margin-top: 6px; }}
+  pre {{ margin: 0; white-space: pre-wrap; word-break: keep-all; }}
+  pre.tbl {{ white-space: pre; }}
+  section {{ margin-top: 40px; }}
+  h2 {{
+    font-size: 13.5px; color: var(--accent); letter-spacing: 1px;
+    font-weight: 700; margin: 0 0 12px 0;
+  }}
+  .intro {{ color: var(--dim); margin: 0 0 14px 0; }}
+  .more {{ color: var(--dim); margin-top: 10px; font-size: 12.5px; }}
+  .more a {{ color: var(--accent-dim); text-decoration: none; }}
+  .more a:hover {{ color: var(--accent); }}
+  nav.day-nav {{
+    display: flex; justify-content: space-between; align-items: center; gap: 14px;
+    margin-top: 14px; padding: 10px 0;
+    border-top: 1px dashed var(--hair); border-bottom: 1px dashed var(--hair);
+  }}
+  nav.day-nav a {{ color: var(--dim); margin-right: 0; text-decoration: none; }}
+  nav.day-nav a:hover {{ color: var(--accent); }}
+  nav.day-nav .day-strip {{
+    flex: 1; text-align: center; letter-spacing: 0.5px;
+    white-space: nowrap; overflow-x: auto;
+  }}
+  nav.day-nav .day-strip a {{ margin: 0 8px; }}
+  nav.day-nav .day-strip .day-current {{
+    color: var(--accent); font-weight: 700; letter-spacing: 1px; margin: 0 8px;
+  }}
+  nav.day-nav .dim {{ color: var(--hair); }}
+  nav.sections {{
+    color: var(--dim); margin-top: 28px; padding: 8px 0;
+    border-top: 1px dashed var(--hair); border-bottom: 1px dashed var(--hair);
+  }}
+  nav.sections a {{ color: var(--dim); margin-right: 14px; text-decoration: none; }}
+  nav.sections a:hover {{ color: var(--accent); }}
+  .hero-chart {{
+    margin: 28px 0 18px;
+    padding: 22px 0;
+    border-top: 2px solid var(--accent);
+    border-bottom: 2px solid var(--accent);
+  }}
+  .hero-chart .label {{
+    color: var(--accent); font-weight: 700; letter-spacing: 2px;
+    margin-bottom: 6px; text-align: center;
+  }}
+  .hero-chart pre {{
+    font-size: 14px; line-height: 1.55; white-space: pre; overflow-x: auto;
+  }}
+  .caption {{
+    color: var(--dim); margin: 18px 0 8px; line-height: 1.6;
+  }}
+  .caption a {{ color: var(--accent-dim); text-decoration: none; }}
+  .caption a:hover {{ color: var(--accent); }}
+  .scroll {{ overflow-x: auto; }}
+  .meta {{
+    color: var(--dim); margin-top: 56px; padding-top: 20px;
+    border-top: 1px dashed var(--hair); font-size: 12px;
+  }}
+  ::selection {{ background: var(--accent); color: var(--bg); }}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PYTHIA</h1>
+  <div class="tag">// what frontier AI models tell people to buy, captured nightly</div>
+  <div class="meta-top">rendered {rendered} · {n_clean_days} clean days · {n_total_responses} total responses</div>
+</header>
+
+{day_nav}
+
+<section class="hero-chart">
+  <div class="label">NET AI RECOMMENDATION FLOW · {current_day}</div>
+  <div class="scroll"><pre>{hero_chart}</pre></div>
+</section>
+
+<div class="caption">{caption}</div>
+
+<nav class="sections">
+  <a href="day/{current_day}.html">▸ today in detail</a>
+  <a href="trends.html">▸ trends (rolling + cumulative)</a>
+  <a href="prompts.html">▸ methodology</a>
+</nav>
+
+<section id="new">
+  <h2>▸ what's new this week</h2>
+  <pre class="intro">{intro_new}</pre>
+  <div class="scroll"><pre class="tbl">{new_this_week}</pre></div>
+  <div class="more">→ <a href="trends.html#new">full new-this-week list on /trends.html</a></div>
+</section>
+
+<section id="convergence">
+  <h2>▸ cross-vendor convergence — where claude + codex agree (and don't)</h2>
+  <pre class="intro">{intro_convergence}</pre>
+  <div class="scroll"><pre class="tbl">{convergence}</pre></div>
+  <div class="more">→ <a href="trends.html#convergence">full convergence table on /trends.html</a></div>
+</section>
+
+<section id="rolling7">
+  <h2>▸ rolling top · last 7 days</h2>
+  <pre class="intro">{intro_rolling7}</pre>
+  <div class="scroll"><pre class="tbl">{rolling_7d}</pre></div>
+  <div class="more">→ <a href="trends.html#rolling30">30-day + all-time on /trends.html</a></div>
+</section>
+
+<div class="meta"><pre>{footer}</pre></div>
+
+</body>
+</html>
+"""
+
+
 HTML_TRENDS_TMPL = """<!doctype html>
 <html lang="en">
 <head>
@@ -1359,6 +1491,41 @@ def render_day_nav(current: str, days: list[str], is_index: bool) -> str:
     )
 
 
+def render_index_page(d: dict, trends: dict, day: str, days: list[str],
+                      n_total_responses: int) -> str:
+    """The /index.html landing page. Focused: today's hero chart + trend
+    highlights. Detailed per-day data lives on /day/<date>.html."""
+    return HTML_INDEX_TMPL.format(
+        current_day=html.escape(day),
+        rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        n_clean_days=len(days),
+        n_total_responses=n_total_responses,
+        day_nav=render_day_nav(day, days, is_index=True),
+        hero_chart=html.escape(render_hero_chart(d)),
+        caption=html.escape(CAPTION),
+        intro_new=html.escape(
+            "tickers that first appeared in any clean run within the last 7 "
+            "days. signals 'something new' — fresh names emerging in AI "
+            "recommendations vs the existing baseline."
+        ),
+        intro_convergence=html.escape(
+            "tickers where BOTH claude and codex contributed bullish "
+            "mentions. cross-vendor agreement = stronger signal that the "
+            "recommendation flow is consensus, not a quirk of one provider. "
+            "verdict flags whether either model also expressed bearish doubt."
+        ),
+        intro_rolling7=html.escape(
+            "top tickers by net (bullish - bearish) over the last 7 clean "
+            "days. `days` is the count of distinct days each ticker appeared "
+            "— a quick read on persistence vs flash-in-the-pan."
+        ),
+        new_this_week=html.escape(render_new_this_week(trends["new_this_week"][:10])),
+        convergence=html.escape(render_convergence(trends["convergence"][:12])),
+        rolling_7d=html.escape(render_rolling_top(trends["top_7d"][:12], "7 days")),
+        footer=html.escape(FOOTER),
+    )
+
+
 def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
     counts = d["counts"]
     intro_findings = INTRO_FINDINGS.format(
@@ -1429,28 +1596,25 @@ def main() -> int:
             day_path.write_text(page, encoding="utf-8")
             print(f"wrote {day_path}  ({len(page)} bytes)")
 
-        # Index always reflects the latest clean day.
+        # Global panel data (for prompts subpage) + cumulative trends.
+        d = fetch(con, day=None)
+        trends = fetch_trends(con)
+        n_total_responses = sum(r.get("n_responses") or 0 for r in trends["days_index"])
+
+        # Index = focused landing: today's hero + trend highlights.
         latest = days[0]
         d_latest = fetch(con, day=latest)
-        index_page = render_main_page(d_latest, latest, days, is_index=True)
+        index_page = render_index_page(d_latest, trends, latest, days, n_total_responses)
         OUT_PATH.write_text(index_page, encoding="utf-8")
-        print(f"wrote {OUT_PATH}  ({len(index_page)} bytes)  [index = {latest}]")
-
-        # Prompts subpage uses global panel data (not day-scoped).
-        d = fetch(con, day=None)
-
-        # Trends subpage — rolling / cumulative across all clean days.
-        trends = fetch_trends(con)
+        print(f"wrote {OUT_PATH}  ({len(index_page)} bytes)  [index = {latest}, focused]")
     finally:
         con.close()
 
     # ── trends subpage ──
-    n_days = len(days)
-    n_responses = sum(r["n_responses"] or 0 for r in trends["days_index"])
     trends_page = HTML_TRENDS_TMPL.format(
         rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        n_days=n_days,
-        n_responses=n_responses,
+        n_days=len(days),
+        n_responses=n_total_responses,
         intro_rolling=html.escape(
             "rolling windows: top tickers ranked by net (bullish - bearish) "
             "over the window. `days` is the count of distinct days the ticker "
