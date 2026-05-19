@@ -75,6 +75,28 @@ ticker across this day's panel. scroll for the full breakdown."""
 HERO = CAPTION  # legacy alias — render_main_page now uses CAPTION directly
 
 
+EXPLAINER = """\
+the chart above is the NET RECOMMENDATION FLOW for one day: bullish
+mentions minus bearish mentions, per ticker, across two SOTA AI models
+answering 10 questions in 2 personas (40 calls total).
+
+below it, three rolling/cumulative views:
+
+  · NEW THIS WEEK — tickers whose very first appearance was within the
+    last 7 clean days. signals fresh names entering the AI consensus.
+
+  · CONVERGENCE — tickers where BOTH claude and codex contributed
+    bullish mentions. verdict flags whether either model also
+    expressed bearish doubt (split / disagreement / both bull).
+
+  · TOP · LAST 7 DAYS — most-recommended tickers across the recent
+    window, with `days` showing how many distinct days each appeared
+    (a quick read on persistence vs flash-in-the-pan).
+
+detail per day, full methodology, all panel runs, sample responses,
+prompts, personas — all behind the links at the bottom of the page."""
+
+
 WHY = """\
 why bother?
 
@@ -1162,16 +1184,32 @@ HTML_INDEX_TMPL = """<!doctype html>
   .hero-chart pre {{
     font-size: 14px; line-height: 1.55; white-space: pre; overflow-x: auto;
   }}
-  .caption {{
-    color: var(--dim); margin: 18px 0 8px; line-height: 1.6;
+  details.explainer {{
+    margin: 12px 0 28px;
+    padding: 10px 14px;
+    border: 1px dashed var(--hair);
   }}
-  .caption a {{ color: var(--accent-dim); text-decoration: none; }}
-  .caption a:hover {{ color: var(--accent); }}
+  details.explainer > summary {{
+    color: var(--dim); cursor: pointer; outline: none;
+    list-style: none;
+  }}
+  details.explainer > summary::-webkit-details-marker {{ display: none; }}
+  details.explainer > summary::before {{
+    content: "▸ "; color: var(--accent-dim);
+  }}
+  details.explainer[open] > summary::before {{
+    content: "▾ "; color: var(--accent);
+  }}
+  details.explainer > pre {{
+    margin-top: 12px; line-height: 1.6;
+  }}
   .scroll {{ overflow-x: auto; }}
   .meta {{
     color: var(--dim); margin-top: 56px; padding-top: 20px;
     border-top: 1px dashed var(--hair); font-size: 12px;
   }}
+  .meta a {{ color: var(--accent-dim); text-decoration: none; }}
+  .meta a:hover {{ color: var(--accent); }}
   ::selection {{ background: var(--accent); color: var(--bg); }}
 </style>
 </head>
@@ -1179,8 +1217,7 @@ HTML_INDEX_TMPL = """<!doctype html>
 
 <header>
   <h1>PYTHIA</h1>
-  <div class="tag">// what frontier AI models tell people to buy, captured nightly</div>
-  <div class="meta-top">rendered {rendered} · {n_clean_days} clean days · {n_total_responses} total responses</div>
+  <div class="tag">// what frontier AI models tell people to buy</div>
 </header>
 
 {day_nav}
@@ -1190,36 +1227,34 @@ HTML_INDEX_TMPL = """<!doctype html>
   <div class="scroll"><pre>{hero_chart}</pre></div>
 </section>
 
-<div class="caption">{caption}</div>
-
-<nav class="sections">
-  <a href="day/{current_day}.html">▸ today in detail</a>
-  <a href="trends.html">▸ trends (rolling + cumulative)</a>
-  <a href="prompts.html">▸ methodology</a>
-</nav>
+<details class="explainer">
+  <summary>what am I looking at?</summary>
+  <pre>{explainer}</pre>
+</details>
 
 <section id="new">
-  <h2>▸ what's new this week</h2>
-  <pre class="intro">{intro_new}</pre>
+  <h2>▸ new this week</h2>
   <div class="scroll"><pre class="tbl">{new_this_week}</pre></div>
-  <div class="more">→ <a href="trends.html#new">full new-this-week list on /trends.html</a></div>
+  <div class="more">→ <a href="trends.html#new">full list</a></div>
 </section>
 
 <section id="convergence">
-  <h2>▸ cross-vendor convergence — where claude + codex agree (and don't)</h2>
-  <pre class="intro">{intro_convergence}</pre>
+  <h2>▸ where claude + codex agree (and don't)</h2>
   <div class="scroll"><pre class="tbl">{convergence}</pre></div>
-  <div class="more">→ <a href="trends.html#convergence">full convergence table on /trends.html</a></div>
+  <div class="more">→ <a href="trends.html#convergence">full table</a></div>
 </section>
 
 <section id="rolling7">
-  <h2>▸ rolling top · last 7 days</h2>
-  <pre class="intro">{intro_rolling7}</pre>
+  <h2>▸ top picks · last 7 days</h2>
   <div class="scroll"><pre class="tbl">{rolling_7d}</pre></div>
-  <div class="more">→ <a href="trends.html#rolling30">30-day + all-time on /trends.html</a></div>
+  <div class="more">→ <a href="trends.html">30d + all-time on trends</a></div>
 </section>
 
-<div class="meta"><pre>{footer}</pre></div>
+<div class="meta">
+  <pre>  detail per day  → <a href="day/{current_day}.html">today's deep view</a>  ·  <a href="trends.html">trends</a>  ·  <a href="prompts.html">methodology</a></pre>
+  <pre>  {n_clean_days} clean days · {n_total_responses} responses · rendered {rendered}</pre>
+  <pre>{footer}</pre>
+</div>
 
 </body>
 </html>
@@ -1493,8 +1528,9 @@ def render_day_nav(current: str, days: list[str], is_index: bool) -> str:
 
 def render_index_page(d: dict, trends: dict, day: str, days: list[str],
                       n_total_responses: int) -> str:
-    """The /index.html landing page. Focused: today's hero chart + trend
-    highlights. Detailed per-day data lives on /day/<date>.html."""
+    """The /index.html landing page. Stripped down: today's hero chart, three
+    compact trend tables, one collapsible explainer. Detailed per-day data
+    lives on /day/<date>.html; full trends on /trends.html."""
     return HTML_INDEX_TMPL.format(
         current_day=html.escape(day),
         rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -1502,26 +1538,10 @@ def render_index_page(d: dict, trends: dict, day: str, days: list[str],
         n_total_responses=n_total_responses,
         day_nav=render_day_nav(day, days, is_index=True),
         hero_chart=html.escape(render_hero_chart(d)),
-        caption=html.escape(CAPTION),
-        intro_new=html.escape(
-            "tickers that first appeared in any clean run within the last 7 "
-            "days. signals 'something new' — fresh names emerging in AI "
-            "recommendations vs the existing baseline."
-        ),
-        intro_convergence=html.escape(
-            "tickers where BOTH claude and codex contributed bullish "
-            "mentions. cross-vendor agreement = stronger signal that the "
-            "recommendation flow is consensus, not a quirk of one provider. "
-            "verdict flags whether either model also expressed bearish doubt."
-        ),
-        intro_rolling7=html.escape(
-            "top tickers by net (bullish - bearish) over the last 7 clean "
-            "days. `days` is the count of distinct days each ticker appeared "
-            "— a quick read on persistence vs flash-in-the-pan."
-        ),
-        new_this_week=html.escape(render_new_this_week(trends["new_this_week"][:10])),
-        convergence=html.escape(render_convergence(trends["convergence"][:12])),
-        rolling_7d=html.escape(render_rolling_top(trends["top_7d"][:12], "7 days")),
+        explainer=html.escape(EXPLAINER),
+        new_this_week=html.escape(render_new_this_week(trends["new_this_week"][:8])),
+        convergence=html.escape(render_convergence(trends["convergence"][:8])),
+        rolling_7d=html.escape(render_rolling_top(trends["top_7d"][:8], "7 days")),
         footer=html.escape(FOOTER),
     )
 
