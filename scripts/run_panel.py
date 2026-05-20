@@ -68,9 +68,10 @@ def _parse_nasdaq_symdir(path: Path, sym_col: int = 0) -> set[str]:
             if len(parts) <= sym_col:
                 continue
             sym = parts[sym_col].strip().upper()
-            # Skip suffix-only tickers like preferred-share class markers
-            if not sym or any(c in sym for c in (".", "$", "^")):
+            if not sym or any(c in sym for c in ("$", "^")):
                 continue
+            # Keep dotted symbols ($BRK.B, $BF.A) — they're real share classes.
+            # The extraction regex now matches them too.
             out.add(sym)
     return out
 
@@ -341,7 +342,9 @@ REFUSAL_PAT = re.compile(
     r"I'm (?:not able to|unable to|not going to))\b",
     re.IGNORECASE,
 )
-TICKER_PAT = re.compile(r"\$([A-Z]{1,5})\b")
+# Captures bare tickers ($NVDA) and share-class suffixes ($BRK.B, $BF.A).
+# The (?:\.[A-Z]) tail is optional and matches at most one dotted letter.
+TICKER_PAT = re.compile(r"\$([A-Z]{1,5}(?:\.[A-Z])?)\b")
 
 
 def detect_refusal(text: str | None) -> int:
