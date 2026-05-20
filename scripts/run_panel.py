@@ -37,7 +37,53 @@ DB_PATH = ROOT / "db" / "panel.sqlite"
 PERSONAS_PATH = ROOT / "personas.yaml"
 PROMPTS_PATH = ROOT / "prompts.yaml"
 MODEL_CONFIGS_PATH = ROOT / "model_configs.yaml"
+NASDAQ_LISTED_PATH = ROOT / "data" / "nasdaqlisted.txt"
+OTHER_LISTED_PATH = ROOT / "data" / "otherlisted.txt"
 NEUTRAL_CWD = "/tmp"  # avoid loading CLAUDE.md / project memory from a real repo
+
+# Index/benchmark allowlist — calculated indexes not present in symbol files.
+# Crypto symbols ($BTC, $ETH) are deliberately NOT here — they'll be marked
+# needs_review=1 since they aren't equity flow.
+INDEX_ALLOWLIST = {
+    "SPX", "NDX", "RUT", "DJI", "DJX", "VIX", "COMP", "DXY", "IXIC",
+}
+
+
+def _parse_nasdaq_symdir(path: Path, sym_col: int = 0) -> set[str]:
+    """Parse a NASDAQTrader pipe-delimited symbol-directory file.
+    First column is the symbol. Skip header (line 1) and footer
+    ('File Creation Time' line). Returns set of uppercase tickers."""
+    if not path.exists():
+        return set()
+    out: set[str] = set()
+    with path.open() as f:
+        first = True
+        for line in f:
+            if first:
+                first = False
+                continue
+            if line.startswith("File Creation Time"):
+                break
+            parts = line.split("|")
+            if len(parts) <= sym_col:
+                continue
+            sym = parts[sym_col].strip().upper()
+            # Skip suffix-only tickers like preferred-share class markers
+            if not sym or any(c in sym for c in (".", "$", "^")):
+                continue
+            out.add(sym)
+    return out
+
+
+def load_ticker_universe() -> set[str]:
+    """Load the recognized-ticker universe — NASDAQ + NYSE/AMEX/ETF symbol
+    directories plus a small index allowlist. Tickers not in this set get
+    needs_review=1 in the mentions table and are excluded from the headline
+    dashboard aggregates."""
+    universe: set[str] = set(INDEX_ALLOWLIST)
+    universe |= _parse_nasdaq_symdir(NASDAQ_LISTED_PATH, sym_col=0)
+    universe |= _parse_nasdaq_symdir(OTHER_LISTED_PATH, sym_col=0)
+    return universe
 
 # Claude Code's auto-memory subsystem writes "user facts" and "feedback"
 # memories that persist across invocations rooted in the same cwd. With
@@ -304,13 +350,17 @@ def detect_refusal(text: str | None) -> int:
     return 1 if REFUSAL_PAT.search(text) else 0
 
 
-def extract_mentions(response_id: int, text: str | None) -> list[tuple]:
+def extract_mentions(response_id: int, text: str | None,
+                     universe: set[str] | None = None) -> list[tuple]:
     """Return one row per unique ticker in order of first appearance.
 
     `position` is the 1-indexed rank of the first time the ticker appears
     (so a top-5 list yields positions 1..5). `context_snippet` is ±100 chars
-    around the first occurrence. Frequency is recoverable from raw_text;
-    we keep one row per ticker per response for tractable analysis.
+    around the first occurrence. Frequency is recoverable from raw_text.
+
+    If `universe` is provided, tickers not in the set get needs_review=1.
+    Dashboard aggregates filter these out so $UAE, $OPEC, $CNBC etc. don't
+    pollute the headline chart.
     """
     if not text:
         return []
@@ -325,7 +375,8 @@ def extract_mentions(response_id: int, text: str | None) -> list[tuple]:
         start = max(0, m.start() - 100)
         end = min(len(text), m.end() + 100)
         context = text[start:end]
-        rows.append((response_id, ticker, position, None, context, "regex_dollar", 0))
+        needs_review = 0 if (universe is None or ticker in universe) else 1
+        rows.append((response_id, ticker, position, None, context, "regex_dollar", needs_review))
     return rows
 
 
@@ -342,6 +393,8 @@ def main() -> int:
     personas_data = load_yaml(PERSONAS_PATH)
     prompts_data = load_yaml(PROMPTS_PATH)
     model_configs_data = load_yaml(MODEL_CONFIGS_PATH)
+    ticker_universe = load_ticker_universe()
+    print(f"[panel] ticker universe: {len(ticker_universe)} symbols")
 
     preamble = prompts_data["preamble"]
     all_prompts = prompts_data["prompts"]
@@ -450,7 +503,7 @@ def main() -> int:
             ),
         )
         response_id = cur_insert.lastrowid
-        mention_rows = extract_mentions(response_id, result.get("text"))
+        mention_rows = extract_mentions(response_id, result.get("text"), universe=ticker_universe)
         if mention_rows:
             con.executemany(
                 """INSERT INTO mentions (

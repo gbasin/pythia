@@ -30,7 +30,7 @@ DB_PATH = ROOT / "db" / "panel.sqlite"
 NEUTRAL_CWD = "/tmp"
 
 CLASSIFIER_MODEL = "haiku"
-VALID_STANCES = {"bullish", "bearish", "neutral", "context"}
+VALID_STANCES = {"bullish", "bearish", "hold", "neutral", "context"}
 
 CLASSIFIER_PROMPT = """\
 You classify investment recommendations. Below is a response from an AI
@@ -38,17 +38,29 @@ assistant about stocks. Identify every ticker prefixed with $ and judge
 the assistant's STANCE on each one.
 
 Stance values:
-  bullish  - assistant recommends BUYING / OWNING / OVERWEIGHTING the name
-  bearish  - assistant recommends AVOIDING / SELLING / UNDERWEIGHTING it
-  neutral  - mentioned without a clear recommendation either way
+  bullish  - assistant recommends BUYING / OWNING / OVERWEIGHTING / adding
+  bearish  - assistant recommends AVOIDING / SELLING / UNDERWEIGHTING
+  hold     - assistant recommends KEEPING an existing position but NOT
+             adding (explicit hold, "don't sell but don't buy more",
+             "trim but don't exit", "wait for pullback before adding")
+  neutral  - mentioned with no clear recommendation either way
   context  - mentioned only as a comparison, benchmark, or example — not
              as a pick (e.g. "the next NVDA-style winner" or "vs SPY")
 
-Output exactly one row per UNIQUE ticker. The "ticker" field is the
-symbol without the $ prefix.
+IMPORTANT DISTINCTIONS:
+  - "I'd buy" / "I'd own" / "high conviction" / "size up"        → bullish
+  - "I'd avoid" / "I'd sell" / "wouldn't touch" / "underweight"  → bearish
+  - "hold" / "selective add" / "wait for pullback" / "trim but
+     don't exit" / "buy on weakness but not here" / "fair-priced
+     compounder, no urgency"                                      → hold
+  - bare mention with no recommendation, OR pure factual reference → neutral
+  - "the next $NVDA" / "vs $SPY" / "compared to $AVGO"            → context
 
-If the assistant is hedged but tilts one direction, classify by the tilt
-— not "neutral". Only use "neutral" when there's truly no recommendation.
+Output exactly one row per UNIQUE ticker. Required fields:
+  "ticker"   - the symbol without the $ prefix
+  "stance"   - one of: bullish | bearish | hold | neutral | context
+  "evidence" - the SHORT verbatim substring (≤ 150 chars) from the response
+               that you based the stance on. This is for audit only.
 
 Response to analyze:
 ─── BEGIN RESPONSE ───
@@ -56,7 +68,8 @@ Response to analyze:
 ─── END RESPONSE ───
 
 Output ONLY a JSON array. No prose, no markdown, no code fences. Schema:
-[{{"ticker": "NVDA", "stance": "bullish"}}, {{"ticker": "TLT", "stance": "context"}}]
+[{{"ticker": "NVDA", "stance": "hold", "evidence": "selective add, not a clean buy"}},
+ {{"ticker": "TLT", "stance": "context", "evidence": "vs $TLT as benchmark"}}]
 """
 
 
@@ -184,13 +197,14 @@ def main() -> int:
         for lab in labels:
             ticker = (lab.get("ticker") or "").upper().lstrip("$")
             stance = (lab.get("stance") or "").lower()
+            evidence = (lab.get("evidence") or "").strip()[:200] or None
             if ticker not in pending:
                 continue
             if stance not in VALID_STANCES:
                 stance = "neutral"
             con.execute(
-                "UPDATE mentions SET sentiment_hint = ? WHERE id = ?",
-                (stance, pending[ticker]),
+                "UPDATE mentions SET sentiment_hint = ?, evidence_snippet = ? WHERE id = ?",
+                (stance, evidence, pending[ticker]),
             )
             labeled_now.add(ticker)
             total_labeled += 1

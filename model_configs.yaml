@@ -26,13 +26,18 @@ model_configs:
       - "--no-session-persistence"
       - "--permission-mode"
       - "bypassPermissions"
+      - "--allowed-tools"
+      - "WebSearch WebFetch"
     tools_state: "on"
     trace_format: claude-stream-json
     notes: |
-      Default-tooled Claude Code coding-agent surface. Tools (WebSearch,
-      WebFetch, etc.) are enabled. --permission-mode bypassPermissions is
-      REQUIRED — without it the default permission mode denies WebSearch
-      in non-interactive runs.
+      Default-tooled Claude Code coding-agent surface, constrained to
+      WebSearch + WebFetch only via --allowed-tools. --permission-mode
+      bypassPermissions is REQUIRED — without it the default permission
+      mode denies WebSearch in non-interactive runs. Without the
+      --allowed-tools constraint, claude was firing ToolSearch / Write /
+      Bash during stock-recommendation prompts (wasted turns + bloated
+      traces).
 
   - id: codex_gpt55
     provider: codex

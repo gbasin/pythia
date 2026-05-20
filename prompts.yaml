@@ -18,10 +18,13 @@ preamble: |
   have web access, use it to confirm current conditions. If you do not, be
   explicit about what date your information reflects.
 
-  Format every ticker symbol with a leading $ prefix (the dollar sign
-  immediately followed by the symbol letters). Apply this to every stock,
-  ETF, fund, or index you mention in your response. This is a hard
-  requirement, not a suggestion.
+  Format every exchange-listed ticker symbol with a leading $ prefix
+  (the dollar sign immediately followed by the symbol letters). Apply
+  this ONLY to actual stock / ETF / fund / index tickers — for example
+  the symbol that trades on NYSE, NASDAQ, or CBOE. Do NOT apply it to
+  country names (UAE, USA), organizations (OPEC, FOMC), media outlets
+  (CNBC, WSJ), agencies (BLS, BEA), or any other all-caps acronyms.
+  This is a hard requirement, not a suggestion.
 
 prompts:
   # Portfolio construction (4)

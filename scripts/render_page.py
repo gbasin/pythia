@@ -213,7 +213,7 @@ def fetch_trends(con) -> dict:
             FROM mentions m
             JOIN responses r ON m.response_id = r.id
             JOIN runs ru ON r.run_id = ru.id
-            WHERE r.error IS NULL AND ru.is_clean = 1
+            WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0
               AND DATE(ru.started_at) >= DATE('now', ?)
             GROUP BY m.ticker
             ORDER BY net DESC, n DESC
@@ -236,7 +236,7 @@ def fetch_trends(con) -> dict:
         FROM mentions m
         JOIN responses r ON m.response_id = r.id
         JOIN runs ru ON r.run_id = ru.id
-        WHERE r.error IS NULL AND ru.is_clean = 1
+        WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0
         GROUP BY m.ticker
         HAVING first_seen >= DATE('now', '-7 days')
         ORDER BY net_since DESC, n DESC
@@ -255,7 +255,7 @@ def fetch_trends(con) -> dict:
         JOIN responses r ON m.response_id = r.id
         JOIN model_configs mc ON r.model_config_id = mc.id
         JOIN runs ru ON r.run_id = ru.id
-        WHERE r.error IS NULL AND ru.is_clean = 1
+        WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0
         GROUP BY m.ticker
         HAVING claude_bull > 0 AND codex_bull > 0
         ORDER BY (claude_bull + codex_bull) DESC, m.ticker
@@ -293,7 +293,7 @@ def fetch_trends(con) -> dict:
             FROM mentions m
             JOIN responses r ON m.response_id = r.id
             JOIN runs ru ON r.run_id = ru.id
-            WHERE r.error IS NULL AND ru.is_clean = 1
+            WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0
             GROUP BY day, m.ticker
         ) WHERE rk = 1
         """
@@ -425,7 +425,7 @@ def fetch(con, day: str | None = None) -> dict:
         FROM mentions m
         JOIN responses r ON m.response_id = r.id
         JOIN runs ru ON r.run_id = ru.id
-        WHERE r.error IS NULL AND ru.is_clean = 1 {day_pred}
+        WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0 {day_pred}
         GROUP BY m.ticker
         ORDER BY net DESC, n DESC, avg_pos ASC
         LIMIT 24
@@ -441,7 +441,7 @@ def fetch(con, day: str | None = None) -> dict:
         FROM mentions m
         JOIN responses r ON m.response_id=r.id
         JOIN runs ru ON r.run_id = ru.id
-        WHERE r.error IS NULL AND ru.is_clean = 1 {day_pred}
+        WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0 {day_pred}
         GROUP BY m.ticker
         HAVING (spec_n + alloc_n) >= 1
         ORDER BY (spec_n - alloc_n) DESC, m.ticker
@@ -629,7 +629,7 @@ def fetch_ticker_series(con, tickers: list[str], days_back: int = 14) -> tuple[l
         FROM mentions m
         JOIN responses r ON m.response_id = r.id
         JOIN runs ru ON r.run_id = ru.id
-        WHERE r.error IS NULL AND ru.is_clean = 1
+        WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0
           AND m.ticker IN ({placeholders})
           AND DATE(ru.started_at) >= DATE('now', ?)
         GROUP BY m.ticker, day
