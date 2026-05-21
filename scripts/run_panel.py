@@ -21,11 +21,13 @@ import argparse
 import gzip
 import hashlib
 import json
+import os
 import re
 import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +35,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = ROOT / "db" / "panel.sqlite"
+DB_PATH = Path(os.environ.get("PYTHIA_DB_PATH", ROOT / "db" / "panel.sqlite"))
 PERSONAS_PATH = ROOT / "personas.yaml"
 PROMPTS_PATH = ROOT / "prompts.yaml"
 MODEL_CONFIGS_PATH = ROOT / "model_configs.yaml"
@@ -170,6 +172,27 @@ def assemble_prompt(persona: dict, preamble: str, prompt_text: str, tools_state:
     return "\n\n".join(parts) + "\n"
 
 
+ARTIFACT_LEAK_PATTERNS = [
+    re.compile(
+        r"file://[^\s)]+(?:\.gemini|\.antigravitycli|antigravity-cli|brain|artifact)[^\s)]*",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:created|wrote|saved|generated)\s+(?:an?\s+)?artifact\b", re.IGNORECASE),
+    re.compile(r"\bartifact(?:\s+link|\s+path|:)\b", re.IGNORECASE),
+]
+
+
+def detect_artifact_leak(text: str | None) -> bool:
+    """Antigravity can answer by creating an artifact and linking to it.
+
+    Those responses are not suitable for trend extraction because the printed
+    answer is only a summary. Keep the raw row for audit, but mark the
+    response errored so dashboard aggregates do not silently mix partial
+    answers.
+    """
+    return bool(text and any(pat.search(text) for pat in ARTIFACT_LEAK_PATTERNS))
+
+
 def parse_claude_stream(stdout_bytes: bytes) -> dict:
     """Parse claude -p --output-format stream-json output."""
     text_parts: list[str] = []
@@ -283,19 +306,34 @@ def run_one(model_config: dict, full_prompt: str, timeout: int) -> dict:
     cmd.extend(model_config.get("args", []))
     if model_config.get("subcommand") == "exec":
         cmd.append("-")  # codex requires "-" to read from stdin when also receiving piped input
+    input_bytes = full_prompt.encode("utf-8")
+    if model_config["provider"] == "agy":
+        cmd.append(full_prompt)
+        input_bytes = None
+    cwd = NEUTRAL_CWD
+    tmp_cwd = None
+    if model_config["provider"] == "agy":
+        tmp_cwd = tempfile.TemporaryDirectory(prefix="pythia-agy-")
+        cwd = tmp_cwd.name
 
     started_mono = time.monotonic()
     started_iso = now_iso()
     try:
-        proc = subprocess.run(
-            cmd,
-            input=full_prompt.encode("utf-8"),
-            capture_output=True,
-            timeout=timeout,
-            cwd=NEUTRAL_CWD,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=input_bytes,
+                capture_output=True,
+                timeout=timeout,
+                cwd=cwd,
+                check=False,
+            )
+        finally:
+            if tmp_cwd:
+                tmp_cwd.cleanup()
     except subprocess.TimeoutExpired:
+        if tmp_cwd:
+            tmp_cwd.cleanup()
         return {
             "raw_stdout": b"",
             "raw_stderr": b"",
@@ -391,6 +429,11 @@ def main() -> int:
     ap.add_argument("--persona-id")
     ap.add_argument("--model-config-id")
     ap.add_argument("--timeout", type=int, default=300)
+    ap.add_argument(
+        "--smoke-run",
+        action="store_true",
+        help="Mark the run is_clean=0 so test data is excluded from dashboard aggregates.",
+    )
     args = ap.parse_args()
 
     personas_data = load_yaml(PERSONAS_PATH)
@@ -460,8 +503,14 @@ def main() -> int:
         )
     )
     cur = con.execute(
-        "INSERT INTO runs (started_at, panel_version, status) VALUES (?,?,?)",
-        (now_iso(), panel_version, "running"),
+        "INSERT INTO runs (started_at, panel_version, status, is_clean, notes) VALUES (?,?,?,?,?)",
+        (
+            now_iso(),
+            panel_version,
+            "running",
+            0 if args.smoke_run else 1,
+            "smoke run: excluded from dashboard aggregates" if args.smoke_run else None,
+        ),
     )
     run_id = cur.lastrowid
     con.commit()
@@ -477,10 +526,20 @@ def main() -> int:
             failures += 1
             print(f"        ERROR: {result['error']} (stderr={result['raw_stderr'][:200]!r})")
         else:
-            print(
-                f"        ok in {result['elapsed_ms']}ms, "
-                f"out_tokens={result['tokens_out']}, text_len={len(result.get('text') or '')}"
-            )
+            artifact_leak = detect_artifact_leak(result.get("text"))
+            if artifact_leak:
+                failures += 1
+                result["error"] = "artifact_link_in_response"
+                print(
+                    "        REVIEW: artifact link detected; "
+                    f"excluded in {result['elapsed_ms']}ms, "
+                    f"text_len={len(result.get('text') or '')}"
+                )
+            else:
+                print(
+                    f"        ok in {result['elapsed_ms']}ms, "
+                    f"out_tokens={result['tokens_out']}, text_len={len(result.get('text') or '')}"
+                )
 
         trace_gz = gzip.compress(result["raw_stdout"]) if result["raw_stdout"] else None
         cur_insert = con.execute(
@@ -506,7 +565,10 @@ def main() -> int:
             ),
         )
         response_id = cur_insert.lastrowid
-        mention_rows = extract_mentions(response_id, result.get("text"), universe=ticker_universe)
+        if result.get("error"):
+            mention_rows = []
+        else:
+            mention_rows = extract_mentions(response_id, result.get("text"), universe=ticker_universe)
         if mention_rows:
             con.executemany(
                 """INSERT INTO mentions (

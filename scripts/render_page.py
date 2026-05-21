@@ -15,6 +15,8 @@ how it works → operational.
 """
 
 import html
+import os
+import shutil
 import sqlite3
 import textwrap
 from datetime import datetime, timezone
@@ -23,11 +25,13 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = ROOT / "db" / "panel.sqlite"
+DB_PATH = Path(os.environ.get("PYTHIA_DB_PATH", ROOT / "db" / "panel.sqlite"))
 PROMPTS_YAML_PATH = ROOT / "prompts.yaml"
-OUT_PATH = ROOT / "dist" / "index.html"
-OUT_PROMPTS_PATH = ROOT / "dist" / "prompts.html"
-OUT_TRENDS_PATH = ROOT / "dist" / "trends.html"
+ASSETS_DIR = ROOT / "assets"
+OUT_DIR = Path(os.environ.get("PYTHIA_DIST_DIR", ROOT / "dist"))
+OUT_PATH = OUT_DIR / "index.html"
+OUT_PROMPTS_PATH = OUT_DIR / "prompts.html"
+OUT_TRENDS_PATH = OUT_DIR / "trends.html"
 
 # Mirrors TOOLS_OFF_SUFFIX in scripts/run_panel.py — duplicated so the
 # review page can show the exact text models see for tools_off runs.
@@ -37,6 +41,12 @@ TOOLS_OFF_SUFFIX = (
     "If your information is stale, say so and proceed anyway with the "
     "best answer you can give from what you know."
 )
+
+PROVIDER_ICONS = {
+    "claude": ("Claude", "assets/icons/claude.svg"),
+    "codex": ("GPT", "assets/icons/chatgpt.svg"),
+    "agy": ("Gemini", "assets/icons/gemini.svg"),
+}
 
 
 def load_preamble() -> str:
@@ -66,8 +76,8 @@ def assemble_example(persona_desc: str, prompt_text: str, preamble: str, tools_s
 TAGLINE = "what frontier AI models tell people to buy, captured daily"
 
 CAPTION = """\
-every night at 8 PM ET, pythia asks claude opus 4.7 and gpt-5.5 what
-stocks to buy. 10 questions × 2 personas × 2 models = 40 calls. each
+every night at 8 PM ET, pythia asks frontier coding-agent CLIs what
+stocks to buy. 10 questions × 2 personas × configured models. each
 $TICKER they name is labeled (bullish / bearish / neutral / context)
 by a smaller LLM. the chart above is the net (bullish − bearish) per
 ticker across this day's panel. scroll for the full breakdown."""
@@ -77,17 +87,16 @@ HERO = CAPTION  # legacy alias — render_main_page now uses CAPTION directly
 
 EXPLAINER = """\
 the chart above is the NET RECOMMENDATION FLOW for one day: bullish
-mentions minus bearish mentions, per ticker, across two SOTA AI models
-answering 10 questions in 2 personas (40 calls total).
+mentions minus bearish mentions, per ticker, across the configured provider
+surfaces answering 10 questions in 2 personas.
 
 below it, three rolling/cumulative views:
 
-  · NEW THIS WEEK — tickers whose very first appearance was within the
-    last 7 clean days. signals fresh names entering the AI consensus.
+  · FIRST SIGHTINGS — tickers ordered by their first appearance in clean
+    runs, newest first. signals fresh names entering the recommendation flow.
 
-  · CONVERGENCE — tickers where BOTH claude and codex contributed
-    bullish mentions. verdict flags whether either model also
-    expressed bearish doubt (split / disagreement / both bull).
+  · CONSENSUS — tickers where multiple providers contributed bullish
+    mentions. verdict flags 3/3, 2/3, and split-provider agreement.
 
   · TOP · LAST 7 DAYS — most-recommended tickers across the recent
     window, with `days` showing how many distinct days each appeared
@@ -179,10 +188,11 @@ based on who it thinks is listening."""
 
 
 INTRO_MODELS = """\
-two models, one config each. each is invoked through its coding-
-agent CLI harness — claude code for claude, codex CLI for gpt —
-with web search enabled by default. consumer chat surfaces
-(chatgpt.com, claude.ai) are deferred to a later version."""
+each model is invoked through its coding-agent CLI harness —
+claude code for claude, codex CLI for gpt, antigravity CLI for
+gemini — with web/search tools available by default. consumer chat
+surfaces (chatgpt.com, claude.ai, gemini.google.com) are deferred
+to a later version."""
 
 
 FOOTER = """\
@@ -196,8 +206,28 @@ FOOTER = """\
 
 def fetch_trends(con) -> dict:
     """Aggregates across all clean days: rolling windows, new entrants,
-    cross-provider convergence, and a day-by-day index."""
+    cross-provider consensus, and a day-by-day index."""
     con.row_factory = sqlite3.Row
+
+    providers = [
+        r["provider"]
+        for r in con.execute(
+        """
+        SELECT DISTINCT mc.provider
+        FROM responses r
+        JOIN runs ru ON r.run_id = ru.id
+        JOIN model_configs mc ON r.model_config_id = mc.id
+        WHERE r.error IS NULL AND ru.is_clean = 1
+        ORDER BY CASE mc.provider
+                   WHEN 'claude' THEN 1
+                   WHEN 'codex' THEN 2
+                   WHEN 'agy' THEN 3
+                   ELSE 99
+                 END, mc.provider
+        """
+        ).fetchall()
+    ]
+    provider_total = len(providers)
 
     def rolling_top(days_back: int, limit: int = 20):
         return [dict(r) for r in con.execute(
@@ -226,42 +256,58 @@ def fetch_trends(con) -> dict:
     top_30d = rolling_top(30, 20)
     top_all = rolling_top(3650, 20)  # effectively all-time
 
-    new_this_week = [dict(r) for r in con.execute(
+    first_sightings = [dict(r) for r in con.execute(
         """
         SELECT m.ticker, MIN(DATE(ru.started_at)) AS first_seen,
+               MAX(DATE(ru.started_at)) AS last_seen,
+               SUM(CASE WHEN mc.provider='claude' AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS claude_bull,
+               SUM(CASE WHEN mc.provider='claude' AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS claude_bear,
+               SUM(CASE WHEN mc.provider='codex'  AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS codex_bull,
+               SUM(CASE WHEN mc.provider='codex'  AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS codex_bear,
+               SUM(CASE WHEN mc.provider='agy'    AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS agy_bull,
+               SUM(CASE WHEN mc.provider='agy'    AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS agy_bear,
                SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1
                         WHEN m.sentiment_hint='bearish' THEN -1
                         ELSE 0 END) AS net_since,
-               COUNT(*) AS n
-        FROM mentions m
-        JOIN responses r ON m.response_id = r.id
-        JOIN runs ru ON r.run_id = ru.id
-        WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0
-        GROUP BY m.ticker
-        HAVING first_seen >= DATE('now', '-7 days')
-        ORDER BY net_since DESC, n DESC
-        LIMIT 30
-        """
-    ).fetchall()]
-
-    convergence = [dict(r) for r in con.execute(
-        """
-        SELECT m.ticker,
-               SUM(CASE WHEN mc.provider='claude' AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS claude_bull,
-               SUM(CASE WHEN mc.provider='codex'  AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS codex_bull,
-               SUM(CASE WHEN mc.provider='claude' AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS claude_bear,
-               SUM(CASE WHEN mc.provider='codex'  AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS codex_bear
+               COUNT(*) AS n,
+               COUNT(DISTINCT DATE(ru.started_at)) AS days_seen
         FROM mentions m
         JOIN responses r ON m.response_id = r.id
         JOIN model_configs mc ON r.model_config_id = mc.id
         JOIN runs ru ON r.run_id = ru.id
         WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0
         GROUP BY m.ticker
-        HAVING claude_bull > 0 AND codex_bull > 0
-        ORDER BY (claude_bull + codex_bull) DESC, m.ticker
+        ORDER BY first_seen DESC, net_since DESC, n DESC
+        LIMIT 30
+        """
+    ).fetchall()]
+
+    consensus = [dict(r) for r in con.execute(
+        """
+        SELECT m.ticker,
+               SUM(CASE WHEN mc.provider='claude' AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS claude_bull,
+               SUM(CASE WHEN mc.provider='claude' AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS claude_bear,
+               SUM(CASE WHEN mc.provider='codex'  AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS codex_bull,
+               SUM(CASE WHEN mc.provider='codex'  AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS codex_bear,
+               SUM(CASE WHEN mc.provider='agy'    AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS agy_bull,
+               SUM(CASE WHEN mc.provider='agy'    AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS agy_bear,
+               SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS total_bull,
+               SUM(CASE WHEN m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS total_bear,
+               COUNT(DISTINCT CASE WHEN m.sentiment_hint='bullish' THEN mc.provider END) AS bullish_providers,
+               COUNT(DISTINCT CASE WHEN m.sentiment_hint='bearish' THEN mc.provider END) AS bearish_providers
+        FROM mentions m
+        JOIN responses r ON m.response_id = r.id
+        JOIN model_configs mc ON r.model_config_id = mc.id
+        JOIN runs ru ON r.run_id = ru.id
+        WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0
+        GROUP BY m.ticker
+        HAVING bullish_providers >= 2
+        ORDER BY bullish_providers DESC, total_bull DESC, (total_bull - total_bear) DESC, m.ticker
         LIMIT 20
         """
     ).fetchall()]
+    for r in consensus:
+        r["provider_total"] = provider_total
 
     days_index = [dict(r) for r in con.execute(
         """
@@ -305,13 +351,13 @@ def fetch_trends(con) -> dict:
         d["lead_net"] = lead[1] if lead else None
 
     # Sparklines for the rolling-top tickers
-    all_top_tickers = list({r["ticker"] for r in (top_7d + top_30d + top_all + convergence)})
+    all_top_tickers = list({r["ticker"] for r in (top_7d + top_30d + top_all + consensus)})
     _, series = fetch_ticker_series(con, all_top_tickers, days_back=30)
     spark_max = max(
         (abs(v) for vs in series.values() for v in vs if v is not None),
         default=1,
     )
-    for bucket in (top_7d, top_30d, top_all, convergence):
+    for bucket in (top_7d, top_30d, top_all, consensus):
         for r in bucket:
             r["sparkline"] = sparkline(series.get(r["ticker"], []), max_abs=spark_max)
             r["spark_days"] = len(series.get(r["ticker"], []))
@@ -320,8 +366,9 @@ def fetch_trends(con) -> dict:
         top_7d=top_7d,
         top_30d=top_30d,
         top_all=top_all,
-        new_this_week=new_this_week,
-        convergence=convergence,
+        first_sightings=first_sightings,
+        consensus=consensus,
+        providers=providers,
         days_index=days_index,
     )
 
@@ -827,44 +874,88 @@ def render_rolling_top(rows: list[dict], window_label: str) -> str:
     return "\n".join(lines)
 
 
-def render_new_this_week(rows: list[dict]) -> str:
+def render_provider_heading(provider: str) -> str:
+    label, src = PROVIDER_ICONS.get(provider, (provider, ""))
+    if not src:
+        return html.escape(label)
+    return (
+        f'<span class="provider-head" title="{html.escape(label)}">'
+        f'<img class="provider-icon" src="{html.escape(src)}" alt="" aria-hidden="true">'
+        f'<span class="sr-only">{html.escape(label)}</span>'
+        "</span>"
+    )
+
+
+def provider_cell(row: dict, provider: str) -> str:
+    bull = row.get(f"{provider}_bull") or 0
+    bear = row.get(f"{provider}_bear") or 0
+    return f"{bull}/{bear}"
+
+
+def render_first_sightings(rows: list[dict], providers: list[str]) -> str:
     if not rows:
-        return "  (no new tickers in the last 7 days yet)"
-    lines = ["  ticker   first_seen   net   n"]
-    lines.append("  ------   ----------   ----  --")
+        return '<pre class="tbl">  (no first sightings yet)</pre>'
+    providers = providers or []
+    lines = [
+        '<div class="scroll"><table class="data-table provider-table">',
+        "<thead><tr>",
+        "<th>ticker</th><th>first_seen</th><th>last_seen</th>",
+    ]
+    lines.extend(f"<th>{render_provider_heading(p)}</th>" for p in providers)
+    lines.append("<th>net</th><th>n</th><th>days</th></tr></thead><tbody>")
     for r in rows:
         net = r.get("net_since") or 0
         sign = "+" if net > 0 else ("-" if net < 0 else " ")
-        lines.append(
-            f"  ${r['ticker']:<5}   {r['first_seen']}   {sign}{abs(net):<3}  {r.get('n') or 0:>3}"
-        )
-    return "\n".join(lines)
+        lines.append("<tr>")
+        lines.append(f"<td>${html.escape(r['ticker'])}</td>")
+        lines.append(f"<td>{html.escape(r['first_seen'])}</td>")
+        lines.append(f"<td>{html.escape(r.get('last_seen') or '-')}</td>")
+        for provider in providers:
+            lines.append(f"<td class=\"num\">{html.escape(provider_cell(r, provider))}</td>")
+        lines.append(f"<td class=\"num\">{sign}{abs(net)}</td>")
+        lines.append(f"<td class=\"num\">{r.get('n') or 0}</td>")
+        lines.append(f"<td class=\"num\">{r.get('days_seen') or 0}</td>")
+        lines.append("</tr>")
+    lines.append("</tbody></table></div>")
+    return "".join(lines)
 
 
-def render_convergence(rows: list[dict]) -> str:
+def render_consensus(rows: list[dict], providers: list[str]) -> str:
     if not rows:
-        return "  (no tickers yet where both providers were bullish)"
+        return '<pre class="tbl">  (no tickers yet where multiple providers were bullish)</pre>'
     n_days = max((r.get("spark_days") or 0 for r in rows), default=0)
     spark_header = f"{n_days}d trend" if n_days else "trend"
+    providers = providers or []
     lines = [
-        f"  ticker   claude  codex  total      verdict        {spark_header}",
-        f"  ------   ------  -----  -----      -------        {'─' * max(n_days, 4)}",
+        '<div class="scroll"><table class="data-table provider-table">',
+        "<thead><tr>",
+        "<th>ticker</th>",
     ]
+    lines.extend(f"<th>{render_provider_heading(p)}</th>" for p in providers)
+    lines.append(
+        f"<th>total</th><th>verdict</th><th>{html.escape(spark_header)}</th>"
+        "</tr></thead><tbody>"
+    )
     for r in rows:
-        cb = r.get("claude_bull") or 0
-        kb = r.get("codex_bull") or 0
-        cbe = r.get("claude_bear") or 0
-        kbe = r.get("codex_bear") or 0
-        verdict = "both BULL"
-        if cbe and kbe:
-            verdict = "split"
-        elif cbe or kbe:
-            verdict = "BULL w/ disagreement"
+        total_bull = r.get("total_bull") or 0
+        total_bear = r.get("total_bear") or 0
+        provider_total = r.get("provider_total") or 0
+        bullish_providers = r.get("bullish_providers") or 0
+        bearish_providers = r.get("bearish_providers") or 0
+        verdict = f"{bullish_providers}/{provider_total} BULL"
+        if total_bear and bearish_providers:
+            verdict = f"{verdict} split"
         spark = r.get("sparkline", "")
-        lines.append(
-            f"  ${r['ticker']:<5}   {cb:>4}/{cbe:<1}  {kb:>3}/{kbe:<1}  {cb+kb:>4}      {verdict:<14}  {spark}"
-        )
-    return "\n".join(lines)
+        lines.append("<tr>")
+        lines.append(f"<td>${html.escape(r['ticker'])}</td>")
+        for provider in providers:
+            lines.append(f"<td class=\"num\">{html.escape(provider_cell(r, provider))}</td>")
+        lines.append(f"<td class=\"num\">{total_bull-total_bear:+}</td>")
+        lines.append(f"<td>{html.escape(verdict)}</td>")
+        lines.append(f"<td>{html.escape(spark)}</td>")
+        lines.append("</tr>")
+    lines.append("</tbody></table></div>")
+    return "".join(lines)
 
 
 def render_days_index(rows: list[dict]) -> str:
@@ -1092,7 +1183,7 @@ HTML_TMPL = """<!doctype html>
   <pre class="intro">{intro_personas}</pre>
   <div class="scroll"><pre>{personas}</pre></div>
 
-  <h3>the 2 models · 4 configurations</h3>
+  <h3>configured model surfaces</h3>
   <pre class="intro">{intro_models}</pre>
   <div class="scroll"><pre class="tbl">{model_configs}</pre></div>
 </section>
@@ -1204,6 +1295,29 @@ HTML_INDEX_TMPL = """<!doctype html>
     margin-top: 12px; line-height: 1.6;
   }}
   .scroll {{ overflow-x: auto; }}
+  .data-table {{
+    border-collapse: collapse; font: inherit; color: var(--fg);
+  }}
+  .data-table th, .data-table td {{
+    padding: 0 18px 0 0; text-align: left; white-space: nowrap;
+  }}
+  .data-table th {{
+    color: var(--dim); font-weight: 700;
+    border-bottom: 1px dashed var(--dim);
+  }}
+  .data-table .num {{ text-align: right; }}
+  .provider-head {{
+    display: inline-flex; width: 42px; align-items: center; justify-content: center;
+    vertical-align: middle;
+  }}
+  .provider-icon {{
+    width: 16px; height: 16px; display: block; opacity: 0.9;
+    filter: invert(92%) sepia(9%) saturate(225%) hue-rotate(3deg) brightness(102%) contrast(90%);
+  }}
+  .sr-only {{
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }}
   .meta {{
     color: var(--dim); margin-top: 56px; padding-top: 20px;
     border-top: 1px dashed var(--hair); font-size: 12px;
@@ -1233,15 +1347,15 @@ HTML_INDEX_TMPL = """<!doctype html>
 </details>
 
 <section id="new">
-  <h2>▸ new this week</h2>
-  <div class="scroll"><pre class="tbl">{new_this_week}</pre></div>
-  <div class="more">→ <a href="trends.html#new">full list</a></div>
+  <h2>▸ first sightings</h2>
+  {first_sightings}
+  <div class="more">→ <a href="trends.html#first-sightings">full list</a></div>
 </section>
 
-<section id="convergence">
-  <h2>▸ where claude + codex agree (and don't)</h2>
-  <div class="scroll"><pre class="tbl">{convergence}</pre></div>
-  <div class="more">→ <a href="trends.html#convergence">full table</a></div>
+<section id="consensus">
+  <h2>▸ provider consensus</h2>
+  {consensus}
+  <div class="more">→ <a href="trends.html#consensus">full table</a></div>
 </section>
 
 <section id="rolling7">
@@ -1303,6 +1417,29 @@ HTML_TRENDS_TMPL = """<!doctype html>
   nav a {{ color: var(--dim); margin-right: 14px; text-decoration: none; }}
   nav a:hover {{ color: var(--accent); }}
   .scroll {{ overflow-x: auto; }}
+  .data-table {{
+    border-collapse: collapse; font: inherit; color: var(--fg);
+  }}
+  .data-table th, .data-table td {{
+    padding: 0 18px 0 0; text-align: left; white-space: nowrap;
+  }}
+  .data-table th {{
+    color: var(--dim); font-weight: 700;
+    border-bottom: 1px dashed var(--dim);
+  }}
+  .data-table .num {{ text-align: right; }}
+  .provider-head {{
+    display: inline-flex; width: 42px; align-items: center; justify-content: center;
+    vertical-align: middle;
+  }}
+  .provider-icon {{
+    width: 16px; height: 16px; display: block; opacity: 0.9;
+    filter: invert(92%) sepia(9%) saturate(225%) hue-rotate(3deg) brightness(102%) contrast(90%);
+  }}
+  .sr-only {{
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }}
   .meta {{
     color: var(--dim); margin-top: 56px; padding-top: 20px;
     border-top: 1px dashed var(--hair); font-size: 12px;
@@ -1323,8 +1460,8 @@ HTML_TRENDS_TMPL = """<!doctype html>
   <a href="#rolling7">last 7 days</a>
   <a href="#rolling30">last 30 days</a>
   <a href="#alltime">all-time</a>
-  <a href="#new">new this week</a>
-  <a href="#convergence">convergence</a>
+  <a href="#first-sightings">first sightings</a>
+  <a href="#consensus">consensus</a>
   <a href="#days">all days</a>
   <a href="prompts.html">▸ prompts</a>
 </nav>
@@ -1345,16 +1482,16 @@ HTML_TRENDS_TMPL = """<!doctype html>
   <div class="scroll"><pre class="tbl">{rolling_all}</pre></div>
 </section>
 
-<section id="new">
-  <h2>▸ new this week</h2>
-  <pre class="intro">{intro_new}</pre>
-  <div class="scroll"><pre class="tbl">{new_this_week}</pre></div>
+<section id="first-sightings">
+  <h2>▸ first sightings</h2>
+  <pre class="intro">{intro_first_sightings}</pre>
+  {first_sightings}
 </section>
 
-<section id="convergence">
-  <h2>▸ convergence — where claude + codex both push bullish</h2>
-  <pre class="intro">{intro_convergence}</pre>
-  <div class="scroll"><pre class="tbl">{convergence}</pre></div>
+<section id="consensus">
+  <h2>▸ provider consensus</h2>
+  <pre class="intro">{intro_consensus}</pre>
+  {consensus}
 </section>
 
 <section id="days">
@@ -1539,8 +1676,10 @@ def render_index_page(d: dict, trends: dict, day: str, days: list[str],
         day_nav=render_day_nav(day, days, is_index=True),
         hero_chart=html.escape(render_hero_chart(d)),
         explainer=html.escape(EXPLAINER),
-        new_this_week=html.escape(render_new_this_week(trends["new_this_week"][:8])),
-        convergence=html.escape(render_convergence(trends["convergence"][:8])),
+        first_sightings=render_first_sightings(
+            trends["first_sightings"][:8], trends["providers"]
+        ),
+        consensus=render_consensus(trends["consensus"][:8], trends["providers"]),
         rolling_7d=html.escape(render_rolling_top(trends["top_7d"][:8], "7 days")),
         footer=html.escape(FOOTER),
     )
@@ -1579,7 +1718,7 @@ def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
         overview=html.escape(render_overview(d)),
         runs=html.escape(render_runs(d)),
         footer=html.escape(FOOTER),
-        db_rel=html.escape(str(DB_PATH.relative_to(ROOT))),
+        db_rel=html.escape(str(DB_PATH.relative_to(ROOT) if DB_PATH.is_relative_to(ROOT) else DB_PATH)),
         root=html.escape(str(ROOT)),
     )
 
@@ -1590,8 +1729,10 @@ def main() -> int:
         return 1
     out_dir = OUT_PATH.parent
     day_dir = out_dir / "day"
-    out_dir.mkdir(exist_ok=True)
-    day_dir.mkdir(exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    day_dir.mkdir(parents=True, exist_ok=True)
+    if ASSETS_DIR.exists():
+        shutil.copytree(ASSETS_DIR, out_dir / "assets", dirs_exist_ok=True)
 
     con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     try:
@@ -1642,19 +1783,17 @@ def main() -> int:
             "clean days. when there's less than the window's worth of data, "
             "values are just whatever is available."
         ),
-        intro_new=html.escape(
-            "tickers whose very first appearance in any clean run was within "
-            "the last 7 days. signals 'something new' — e.g. an earnings "
-            "story emerged, a sector rotation, a model update introduced "
-            "fresh names. net_since aggregates all sentiment from first_seen "
-            "through now."
+        intro_first_sightings=html.escape(
+            "tickers ordered by first appearance in clean runs, newest first. "
+            "useful for spotting names that have newly entered the "
+            "recommendation flow. per-provider cells are bull/bear counts; "
+            "net aggregates all sentiment from first sighting through now."
         ),
-        intro_convergence=html.escape(
-            "tickers where BOTH claude and codex contributed bullish "
-            "mentions (across all clean days). cross-vendor agreement = "
-            "stronger signal that the recommendation flow is consensus, "
-            "not a quirk of one provider's training. verdict notes whether "
-            "either model also expressed bearish doubt."
+        intro_consensus=html.escape(
+            "tickers where multiple providers contributed bullish mentions "
+            "(across all clean days). provider-count agreement is a stronger "
+            "signal that the recommendation flow is consensus, not a quirk "
+            "of one model surface. per-provider cells are bull/bear counts."
         ),
         intro_days=html.escape(
             "every clean run grouped by calendar day. click → to open that "
@@ -1664,8 +1803,8 @@ def main() -> int:
         rolling_7d=html.escape(render_rolling_top(trends["top_7d"], "7 days")),
         rolling_30d=html.escape(render_rolling_top(trends["top_30d"], "30 days")),
         rolling_all=html.escape(render_rolling_top(trends["top_all"], "all-time")),
-        new_this_week=html.escape(render_new_this_week(trends["new_this_week"])),
-        convergence=html.escape(render_convergence(trends["convergence"])),
+        first_sightings=render_first_sightings(trends["first_sightings"], trends["providers"]),
+        consensus=render_consensus(trends["consensus"], trends["providers"]),
         days_index=html.escape(render_days_index(trends["days_index"])),
         footer=html.escape(FOOTER),
     )

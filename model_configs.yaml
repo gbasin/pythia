@@ -60,3 +60,21 @@ model_configs:
       session files aren't persisted. --ignore-user-config + --ignore-rules
       for clean baseline. Codex's web_search is hardcoded into the engine
       (no documented way to disable in this version).
+
+  - id: agy_flash35
+    provider: agy
+    cli_command: agy
+    subcommand: null
+    model_name: Gemini 3.5 Flash (High)
+    args:
+      - "--print-timeout"
+      - "300s"
+      - "--print"
+    tools_state: "on"
+    trace_format: plain-text
+    notes: |
+      Google Antigravity CLI terminal-agent surface. Smoke-tested on
+      2026-05-21; logs reported the selected model override as
+      "Gemini 3.5 Flash (High)". The CLI does not currently expose a
+      documented non-interactive model flag in `agy --help`, so this config
+      records the observed default rather than forcing a model ID.

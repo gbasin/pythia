@@ -19,6 +19,7 @@ Idempotent — only touches mentions where sentiment_hint IS NULL unless
 
 import argparse
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -26,11 +27,18 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = ROOT / "db" / "panel.sqlite"
+DB_PATH = Path(os.environ.get("PYTHIA_DB_PATH", ROOT / "db" / "panel.sqlite"))
 NEUTRAL_CWD = "/tmp"
 
 CLASSIFIER_MODEL = "haiku"
 VALID_STANCES = {"bullish", "bearish", "hold", "neutral", "context"}
+PERSISTED_STANCES = {
+    "bullish": "bullish",
+    "bearish": "bearish",
+    "hold": "neutral",
+    "neutral": "neutral",
+    "context": "context",
+}
 
 CLASSIFIER_PROMPT = """\
 You classify investment recommendations. Below is a response from an AI
@@ -151,7 +159,7 @@ def main() -> int:
         SELECT DISTINCT r.id AS resp_id, r.raw_text
         FROM responses r
         JOIN mentions m ON m.response_id = r.id
-        WHERE m.sentiment_hint IS NULL AND r.raw_text IS NOT NULL
+        WHERE m.sentiment_hint IS NULL AND r.raw_text IS NOT NULL AND r.error IS NULL
         ORDER BY r.id
         """
     ).fetchall()
@@ -202,6 +210,7 @@ def main() -> int:
                 continue
             if stance not in VALID_STANCES:
                 stance = "neutral"
+            stance = PERSISTED_STANCES[stance]
             con.execute(
                 "UPDATE mentions SET sentiment_hint = ?, evidence_snippet = ? WHERE id = ?",
                 (stance, evidence, pending[ticker]),

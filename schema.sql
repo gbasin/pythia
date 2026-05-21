@@ -1,5 +1,5 @@
 -- AI Recommendation Panel — SQLite schema
--- Daily panel that asks SOTA frontier models (via CLI coding-agent harnesses)
+-- Daily panel that asks frontier models (via CLI coding-agent harnesses)
 -- for investment recommendations across persona × tool-state combinations.
 -- Stores raw text, full stream-JSON trace (gzipped), and extracted ticker mentions.
 
@@ -38,8 +38,8 @@ CREATE TABLE IF NOT EXISTS personas (
 -- The CLI surfaces we panel.
 CREATE TABLE IF NOT EXISTS model_configs (
   id              INTEGER PRIMARY KEY,
-  provider        TEXT    NOT NULL,           -- claude | codex
-  cli_command     TEXT    NOT NULL,           -- claude | codex
+  provider        TEXT    NOT NULL,           -- claude | codex | agy
+  cli_command     TEXT    NOT NULL,           -- claude | codex | agy
   model_name      TEXT    NOT NULL,           -- claude-opus-4-7 | gpt-5.5
   invocation_args TEXT    NOT NULL,           -- JSON: extra CLI flags for reproducibility
   notes           TEXT
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS responses (
   tools_state         TEXT    NOT NULL,       -- on | off
   raw_text            TEXT,                   -- final response text only
   raw_trace_gz        BLOB,                   -- gzipped full stream-JSON / JSONL trace
-  trace_format        TEXT,                   -- 'claude-stream-json' | 'codex-jsonl'
+  trace_format        TEXT,                   -- 'claude-stream-json' | 'codex-jsonl' | 'plain-text'
   trace_bytes_unz     INTEGER,                -- uncompressed size, for analytics
   latency_ms          INTEGER,
   tokens_in           INTEGER,
@@ -84,8 +84,9 @@ CREATE TABLE IF NOT EXISTS mentions (
   response_id     INTEGER NOT NULL REFERENCES responses(id),
   ticker          TEXT    NOT NULL,           -- normalized uppercase, e.g. NVDA
   position        INTEGER,                    -- 1-indexed order in response (NULL if unordered)
-  sentiment_hint  TEXT,                       -- 'buy' | 'hold' | 'sell' | 'avoid' | 'neutral' | NULL
+  sentiment_hint  TEXT,                       -- 'bullish' | 'bearish' | 'neutral' | 'context' | NULL
   context_snippet TEXT,                       -- ±200 chars around the mention
+  evidence_snippet TEXT,
   extraction_method TEXT NOT NULL,            -- 'regex_dollar' | 'regex_caps' | 'company_name' | 'manual'
   needs_review    INTEGER NOT NULL DEFAULT 0  -- 1 if regex flagged as ambiguous
 );

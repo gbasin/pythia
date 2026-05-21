@@ -2,9 +2,10 @@
 
 what frontier AI models tell people to buy, captured daily.
 
-every night at 8 PM ET, pythia asks **claude opus 4.7** and **gpt-5.5** to
-recommend stocks — across 10 prompts, two personas (an aggressive young
-speculator and a professional allocator), with web search enabled. every
+every night at 8 PM ET, pythia asks **claude opus 4.7**, **gpt-5.5**, and
+**gemini 3.5 flash via antigravity CLI** to recommend stocks — across 10
+prompts and two personas (an aggressive young speculator and a professional
+allocator), with tools/search available. every
 `$TICKER` the model emits is classified by a smaller LLM as **bullish**,
 **bearish**, **neutral**, or **context**. raw text + full JSON traces are
 gzipped and stored in SQLite. a static terminal-aesthetic dashboard rebuilds
@@ -28,6 +29,7 @@ names receive is the signal we're capturing, not a bias to scrub.
 prereqs (macOS):
 - [Claude Code CLI](https://docs.claude.com/claude-code) authenticated with a Pro/Max subscription
 - [Codex CLI](https://github.com/openai/codex) authenticated with a ChatGPT Pro subscription
+- [Google Antigravity CLI](https://antigravity.google/) authenticated
 - [uv](https://docs.astral.sh/uv/) for Python script execution
 
 ```bash
@@ -35,7 +37,7 @@ git clone git@github.com:gbasin/pythia.git
 cd pythia
 sqlite3 db/panel.sqlite < schema.sql      # initialize DB (first time only)
 
-uv run scripts/run_panel.py --dry-run     # preview the 40-tuple matrix
+uv run scripts/run_panel.py --dry-run     # preview the 60-tuple matrix
 ./scripts/daily_run.sh                    # run_panel → classify → render
 open dist/index.html                      # view dashboard
 ```
@@ -48,28 +50,28 @@ uv run scripts/run_panel.py --prompt-id name_01 --persona-id speculator \
     --model-config-id claude_opus        # one tuple, for smoke-testing
 uv run scripts/classify_mentions.py       # label sentiment on new mentions
 uv run scripts/classify_mentions.py --reclassify   # nuke + redo all labels
-uv run scripts/render_page.py             # rebuild index.html + prompts.html
+uv run scripts/render_page.py             # rebuild index.html + trends.html + prompts.html
 ```
 
 ## panel composition
 
-per nightly run: **10 prompts × 2 personas × 2 models = 40 CLI calls**.
+per nightly run: **10 prompts × 2 personas × 3 models = 60 CLI calls**.
 
 every prompt is composed as:
 1. `About me:` persona block
 2. global preamble (current-state grounding + `$TICKER` format directive)
 3. the question (verbatim)
 
-then piped to `claude -p` or `codex exec` over stdin. the full JSONL trace
-(every web search, every reasoning step) is gzipped and stored alongside
-the final response text.
+then sent to `claude -p`, `codex exec`, or `agy --print`. the full trace
+where available, or the plain CLI output for Antigravity, is gzipped and
+stored alongside the final response text.
 
 ## project layout
 
 ```
 prompts.yaml                       # 10 prompts + global preamble
 personas.yaml                      # 2 personas (speculator, allocator)
-model_configs.yaml                 # claude_opus, codex_gpt55 CLI specs
+model_configs.yaml                 # claude_opus, codex_gpt55, agy_flash35 CLI specs
 schema.sql                         # sqlite schema
 
 scripts/run_panel.py               # orchestrator
@@ -103,16 +105,18 @@ after a run, view at:
 - `python3 -m http.server 8731 -d dist` → `http://localhost:8731`
 - accessible over Tailscale at the same URL via IP / MagicDNS
 
-two pages:
-- `/` — net recommendation flow, persona contrast, sample responses, methodology, runs
+three pages:
+- `/` — current snapshot + trend highlights
+- `/trends.html` — rolling ranks, first sightings, provider consensus, day index
 - `/prompts.html` — full prompts + personas + an example of what the model literally sees
 
 ## design decisions
 
-- **coding-agent CLI surfaces, not consumer chat or API.** claude code and
-  codex exec are scriptable, free under our subscriptions, and capture the
-  "AI agent" surface. consumer chat (chatgpt.com, claude.ai) is deferred
-  to a later version — it'd need browser automation.
+- **coding-agent CLI surfaces, not consumer chat or API.** claude code,
+  codex exec, and antigravity CLI are scriptable under authenticated
+  subscriptions and capture the "AI agent" surface. consumer chat
+  (chatgpt.com, claude.ai, gemini.google.com) is deferred to a later
+  version — it'd need browser automation.
 - **named-ticker prompts kept on purpose.** "is NVDA a buy?" is what real
   retail asks; the volume of recommendation those names receive is the
   flow signal, not a bias to scrub. unopinionated rephrasing would measure

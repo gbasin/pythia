@@ -9,5 +9,6 @@ __pycache__/
 *.pyc
 .venv/
 .uv/
+.antigravitycli/
 *.log
 .DS_Store

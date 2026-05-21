@@ -26,6 +26,9 @@ preamble: |
   (CNBC, WSJ), agencies (BLS, BEA), or any other all-caps acronyms.
   This is a hard requirement, not a suggestion.
 
+  Do not create files, artifacts, markdown documents, plans, or follow-up
+  questions. Answer directly in this message only.
+
 prompts:
   # Portfolio construction (4)
   - id: portfolio_01
