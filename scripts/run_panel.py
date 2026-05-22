@@ -540,7 +540,12 @@ def main() -> int:
     # Apply filters for this invocation only.
     prompts = all_prompts
     personas = all_personas
-    model_configs = all_mcs
+    if args.model_config_id:
+        # Explicit targeting is allowed even for disabled configs, so we can
+        # smoke-test a paused provider without re-enabling it in nightly.
+        model_configs = all_mcs
+    else:
+        model_configs = [m for m in all_mcs if m.get("enabled", True) is not False]
     if args.prompt_id:
         prompts = [p for p in prompts if p["id"] == args.prompt_id]
     if args.persona_id:

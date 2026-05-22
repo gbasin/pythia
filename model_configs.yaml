@@ -62,6 +62,7 @@ model_configs:
       (no documented way to disable in this version).
 
   - id: agy_flash35
+    enabled: false
     provider: agy
     cli_command: agy
     subcommand: null
@@ -78,3 +79,6 @@ model_configs:
       "Gemini 3.5 Flash (High)". The CLI does not currently expose a
       documented non-interactive model flag in `agy --help`, so this config
       records the observed default rather than forcing a model ID.
+      Temporarily disabled from the default nightly panel after the account hit
+      weekly quota during the first production run; keep available for explicit
+      smoke tests with --model-config-id agy_flash35.
