@@ -181,6 +181,8 @@ ARTIFACT_LEAK_PATTERNS = [
     re.compile(r"\bartifact(?:\s+link|\s+path|:)\b", re.IGNORECASE),
 ]
 
+QUOTA_EXHAUSTED_PAT = re.compile(r"\b(?:RESOURCE_EXHAUSTED|quota reached|code 429)\b", re.IGNORECASE)
+
 
 def detect_artifact_leak(text: str | None) -> bool:
     """Antigravity can answer by creating an artifact and linking to it.
@@ -191,6 +193,47 @@ def detect_artifact_leak(text: str | None) -> bool:
     answers.
     """
     return bool(text and any(pat.search(text) for pat in ARTIFACT_LEAK_PATTERNS))
+
+
+def trace_section(name: str, data: bytes | str | None) -> bytes:
+    if data is None:
+        body = b""
+    elif isinstance(data, bytes):
+        body = data
+    else:
+        body = data.encode("utf-8", errors="replace")
+    return b"===== " + name.encode("utf-8") + b" =====\n" + body + b"\n"
+
+
+def classify_cli_failure(text: str, parsed_text: str, returncode: int) -> str | None:
+    if QUOTA_EXHAUSTED_PAT.search(text):
+        return "quota_exhausted"
+    if returncode != 0:
+        return f"exit {returncode}"
+    if not parsed_text.strip():
+        return "empty_response"
+    return None
+
+
+def skipped_result(reason: str) -> dict:
+    ts = now_iso()
+    msg = f"skipped: {reason}\n".encode("utf-8")
+    return {
+        "raw_stdout": msg,
+        "raw_stderr": b"",
+        "returncode": 0,
+        "elapsed_ms": 0,
+        "started_at": ts,
+        "finished_at": ts,
+        "error": f"skipped_{reason}",
+        "text": "",
+        "session_id": None,
+        "model_name": None,
+        "tokens_in": None,
+        "tokens_out": None,
+        "cost": None,
+        "duration_ms": None,
+    }
 
 
 def parse_claude_stream(stdout_bytes: bytes) -> dict:
@@ -301,6 +344,14 @@ def run_one(model_config: dict, full_prompt: str, timeout: int) -> dict:
         # persona/feedback context across tuples.
         nuke_claude_memory()
     cmd = [model_config["cli_command"]]
+    cwd = NEUTRAL_CWD
+    tmp_cwd = None
+    agy_log_path = None
+    if model_config["provider"] == "agy":
+        tmp_cwd = tempfile.TemporaryDirectory(prefix="pythia-agy-")
+        cwd = tmp_cwd.name
+        agy_log_path = Path(cwd) / "agy.log"
+        cmd.extend(["--log-file", str(agy_log_path)])
     if model_config.get("subcommand"):
         cmd.append(model_config["subcommand"])
     cmd.extend(model_config.get("args", []))
@@ -310,33 +361,33 @@ def run_one(model_config: dict, full_prompt: str, timeout: int) -> dict:
     if model_config["provider"] == "agy":
         cmd.append(full_prompt)
         input_bytes = None
-    cwd = NEUTRAL_CWD
-    tmp_cwd = None
-    if model_config["provider"] == "agy":
-        tmp_cwd = tempfile.TemporaryDirectory(prefix="pythia-agy-")
-        cwd = tmp_cwd.name
 
     started_mono = time.monotonic()
     started_iso = now_iso()
     try:
-        try:
-            proc = subprocess.run(
-                cmd,
-                input=input_bytes,
-                capture_output=True,
-                timeout=timeout,
-                cwd=cwd,
-                check=False,
+        proc = subprocess.run(
+            cmd,
+            input=input_bytes,
+            capture_output=True,
+            timeout=timeout,
+            cwd=cwd,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        agy_log = agy_log_path.read_text(errors="replace") if agy_log_path and agy_log_path.exists() else ""
+        raw_stdout = e.stdout or b""
+        raw_stderr = e.stderr or b""
+        if model_config["provider"] == "agy":
+            raw_stdout = (
+                trace_section("stdout", raw_stdout)
+                + trace_section("stderr", raw_stderr)
+                + trace_section("agy.log", agy_log)
             )
-        finally:
-            if tmp_cwd:
-                tmp_cwd.cleanup()
-    except subprocess.TimeoutExpired:
         if tmp_cwd:
             tmp_cwd.cleanup()
         return {
-            "raw_stdout": b"",
-            "raw_stderr": b"",
+            "raw_stdout": raw_stdout,
+            "raw_stderr": raw_stderr,
             "returncode": -1,
             "elapsed_ms": int((time.monotonic() - started_mono) * 1000),
             "started_at": started_iso,
@@ -352,25 +403,44 @@ def run_one(model_config: dict, full_prompt: str, timeout: int) -> dict:
         }
 
     elapsed_ms = int((time.monotonic() - started_mono) * 1000)
+    agy_log = agy_log_path.read_text(errors="replace") if agy_log_path and agy_log_path.exists() else ""
     if model_config["trace_format"] == "claude-stream-json":
         parsed = parse_claude_stream(proc.stdout)
+        raw_trace = proc.stdout
     elif model_config["trace_format"] == "codex-jsonl":
         parsed = parse_codex_jsonl(proc.stdout)
+        raw_trace = proc.stdout
     else:
         parsed = {
             "text": proc.stdout.decode("utf-8", errors="replace"),
             "session_id": None, "model_name": None,
             "tokens_in": 0, "tokens_out": 0, "cost": None, "duration_ms": None,
         }
+        raw_trace = proc.stdout
+        if model_config["provider"] == "agy":
+            raw_trace = (
+                trace_section("stdout", proc.stdout)
+                + trace_section("stderr", proc.stderr)
+                + trace_section("agy.log", agy_log)
+            )
+    failure_text = "\n".join([
+        parsed.get("text") or "",
+        proc.stdout.decode("utf-8", errors="replace"),
+        proc.stderr.decode("utf-8", errors="replace"),
+        agy_log,
+    ])
+    error = classify_cli_failure(failure_text, parsed.get("text") or "", proc.returncode)
+    if tmp_cwd:
+        tmp_cwd.cleanup()
 
     return {
-        "raw_stdout": proc.stdout,
+        "raw_stdout": raw_trace,
         "raw_stderr": proc.stderr,
         "returncode": proc.returncode,
         "elapsed_ms": parsed.get("duration_ms") or elapsed_ms,
         "started_at": started_iso,
         "finished_at": now_iso(),
-        "error": None if proc.returncode == 0 else f"exit {proc.returncode}",
+        "error": error,
         **parsed,
     }
 
@@ -517,11 +587,17 @@ def main() -> int:
     print(f"[panel] run_id={run_id} panel_version={panel_version}")
 
     failures = 0
+    blocked_providers: dict[str, str] = {}
     for i, (p, pe, mc) in enumerate(tuples, start=1):
         full_prompt = assemble_prompt(pe, preamble, p["text"], mc["tools_state"])
         label = f"{p['id']}/{pe['id']}/{mc['id']}"
         print(f"[{i:>3}/{len(tuples)}] {label} ...", flush=True)
-        result = run_one(mc, full_prompt, timeout=args.timeout)
+        if mc["provider"] in blocked_providers:
+            result = skipped_result(blocked_providers[mc["provider"]])
+        else:
+            result = run_one(mc, full_prompt, timeout=args.timeout)
+            if result["error"] == "quota_exhausted":
+                blocked_providers[mc["provider"]] = "quota_exhausted"
         if result["error"]:
             failures += 1
             print(f"        ERROR: {result['error']} (stderr={result['raw_stderr'][:200]!r})")
