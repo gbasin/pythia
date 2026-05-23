@@ -14,6 +14,15 @@ LOG="$LOG_DIR/panel-$(date +%Y%m%d).log"
 mkdir -p "$LOG_DIR"
 cd "$PROJECT_DIR"
 
+# Load secrets (GEMINI_API_KEY etc.) so subprocess CLIs/scripts inherit them.
+# `.env` is in .gitignore and chmod 600.
+if [ -f "$PROJECT_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$PROJECT_DIR/.env"
+  set +a
+fi
+
 {
   echo
   echo "=== panel run started $(date -u +'%Y-%m-%dT%H:%M:%SZ') ($(date +'%H:%M %Z')) ==="

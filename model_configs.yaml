@@ -61,24 +61,22 @@ model_configs:
       for clean baseline. Codex's web_search is hardcoded into the engine
       (no documented way to disable in this version).
 
-  - id: agy_flash35
-    enabled: false
-    provider: agy
-    cli_command: agy
-    subcommand: null
-    model_name: Gemini 3.5 Flash (High)
+  - id: gemini_flash
+    provider: gemini
+    cli_command: uv
+    subcommand: run
+    model_name: gemini-3.5-flash
     args:
-      - "--print-timeout"
-      - "300s"
-      - "--print"
+      - "scripts/gemini_panel_call.py"
+      - "--model"
+      - "gemini-3.5-flash"
     tools_state: "on"
-    trace_format: plain-text
+    trace_format: gemini-jsonl
     notes: |
-      Google Antigravity CLI terminal-agent surface. Smoke-tested on
-      2026-05-21; logs reported the selected model override as
-      "Gemini 3.5 Flash (High)". The CLI does not currently expose a
-      documented non-interactive model flag in `agy --help`, so this config
-      records the observed default rather than forcing a model ID.
-      Temporarily disabled from the default nightly panel after the account hit
-      weekly quota during the first production run; keep available for explicit
-      smoke tests with --model-config-id agy_flash35.
+      Direct Gemini API via google-genai SDK with Google Search grounding
+      enabled. Pay-per-token through GEMINI_API_KEY (loaded from .env by
+      daily_run.sh). Independent of any Antigravity / Google AI Pro/Ultra
+      subscription quota — added to replace agy_flash35 after the
+      subscription weekly-cap lockout. Wrapper emits JSONL events parsed by
+      parse_gemini_jsonl(). Grounding citations are captured in the raw
+      trace as "grounding" events for later inspection.

@@ -12,3 +12,4 @@ __pycache__/
 .antigravitycli/
 *.log
 .DS_Store
+.env

@@ -45,7 +45,7 @@ TOOLS_OFF_SUFFIX = (
 PROVIDER_ICONS = {
     "claude": ("Claude", "assets/icons/claude.svg"),
     "codex": ("GPT", "assets/icons/chatgpt.svg"),
-    "agy": ("Gemini", "assets/icons/gemini.svg"),
+    "gemini": ("Gemini", "assets/icons/gemini.svg"),
 }
 
 
@@ -188,11 +188,11 @@ based on who it thinks is listening."""
 
 
 INTRO_MODELS = """\
-each model is invoked through its coding-agent CLI harness —
-claude code for claude, codex CLI for gpt, antigravity CLI for
-gemini — with web/search tools available by default. consumer chat
-surfaces (chatgpt.com, claude.ai, gemini.google.com) are deferred
-to a later version."""
+each model is invoked through its production agent harness —
+claude code for claude, codex CLI for gpt, google-genai SDK with
+Google Search grounding for gemini — with web/search tools available
+by default. consumer chat surfaces (chatgpt.com, claude.ai,
+gemini.google.com) are deferred to a later version."""
 
 
 FOOTER = """\
@@ -221,7 +221,7 @@ def fetch_trends(con) -> dict:
         ORDER BY CASE mc.provider
                    WHEN 'claude' THEN 1
                    WHEN 'codex' THEN 2
-                   WHEN 'agy' THEN 3
+                   WHEN 'gemini' THEN 3
                    ELSE 99
                  END, mc.provider
         """
@@ -264,8 +264,8 @@ def fetch_trends(con) -> dict:
                SUM(CASE WHEN mc.provider='claude' AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS claude_bear,
                SUM(CASE WHEN mc.provider='codex'  AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS codex_bull,
                SUM(CASE WHEN mc.provider='codex'  AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS codex_bear,
-               SUM(CASE WHEN mc.provider='agy'    AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS agy_bull,
-               SUM(CASE WHEN mc.provider='agy'    AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS agy_bear,
+               SUM(CASE WHEN mc.provider='gemini' AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS gemini_bull,
+               SUM(CASE WHEN mc.provider='gemini' AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS gemini_bear,
                SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1
                         WHEN m.sentiment_hint='bearish' THEN -1
                         ELSE 0 END) AS net_since,
@@ -289,8 +289,8 @@ def fetch_trends(con) -> dict:
                SUM(CASE WHEN mc.provider='claude' AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS claude_bear,
                SUM(CASE WHEN mc.provider='codex'  AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS codex_bull,
                SUM(CASE WHEN mc.provider='codex'  AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS codex_bear,
-               SUM(CASE WHEN mc.provider='agy'    AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS agy_bull,
-               SUM(CASE WHEN mc.provider='agy'    AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS agy_bear,
+               SUM(CASE WHEN mc.provider='gemini' AND m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS gemini_bull,
+               SUM(CASE WHEN mc.provider='gemini' AND m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS gemini_bear,
                SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1 ELSE 0 END) AS total_bull,
                SUM(CASE WHEN m.sentiment_hint='bearish' THEN 1 ELSE 0 END) AS total_bear,
                COUNT(DISTINCT CASE WHEN m.sentiment_hint='bullish' THEN mc.provider END) AS bullish_providers,

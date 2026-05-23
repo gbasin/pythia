@@ -282,6 +282,42 @@ def parse_claude_stream(stdout_bytes: bytes) -> dict:
     return out
 
 
+def parse_gemini_jsonl(stdout_bytes: bytes) -> dict:
+    """Parse output from scripts/gemini_panel_call.py.
+
+    Event schema is documented in the wrapper. Only `init` and `result`
+    contribute to the final row; `grounding` events stay in the raw trace
+    for later citation inspection.
+    """
+    out = {
+        "text": "",
+        "session_id": None,
+        "model_name": None,
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "cost": None,
+        "duration_ms": None,
+    }
+    for line in stdout_bytes.decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        et = ev.get("type")
+        if et == "init":
+            out["session_id"] = ev.get("session_id")
+            out["model_name"] = ev.get("model")
+        elif et == "result":
+            out["tokens_in"] = ev.get("tokens_in") or 0
+            out["tokens_out"] = ev.get("tokens_out") or 0
+            out["duration_ms"] = ev.get("duration_ms")
+            out["text"] = (ev.get("text") or "").strip()
+    return out
+
+
 def parse_codex_jsonl(stdout_bytes: bytes) -> dict:
     """Parse `codex exec --json` output.
 
@@ -352,6 +388,11 @@ def run_one(model_config: dict, full_prompt: str, timeout: int) -> dict:
         cwd = tmp_cwd.name
         agy_log_path = Path(cwd) / "agy.log"
         cmd.extend(["--log-file", str(agy_log_path)])
+    elif model_config["provider"] == "gemini":
+        # Wrapper script is referenced as `scripts/gemini_panel_call.py` in
+        # model_configs.yaml; resolve it against the project root rather than
+        # NEUTRAL_CWD so the path works under launchd too.
+        cwd = str(ROOT)
     if model_config.get("subcommand"):
         cmd.append(model_config["subcommand"])
     cmd.extend(model_config.get("args", []))
@@ -409,6 +450,9 @@ def run_one(model_config: dict, full_prompt: str, timeout: int) -> dict:
         raw_trace = proc.stdout
     elif model_config["trace_format"] == "codex-jsonl":
         parsed = parse_codex_jsonl(proc.stdout)
+        raw_trace = proc.stdout
+    elif model_config["trace_format"] == "gemini-jsonl":
+        parsed = parse_gemini_jsonl(proc.stdout)
         raw_trace = proc.stdout
     else:
         parsed = {
