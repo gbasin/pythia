@@ -699,19 +699,22 @@ def indent2(text: str) -> str:
 
 def render_hero_chart(d: dict) -> str:
     """Big, minimalist version of the top-mentions chart for the page hero.
-    Just ticker + net + a wide signed bar. Top 15 only. The full table with
-    bull/bear/neut/ctx columns lives below as 'details'."""
+    Ticker + net + a wide signed bar (today) + a small trailing sparkline
+    (recent days). The full table with bull/bear/neut/ctx columns lives below
+    as 'details'."""
     rows = d["top_mentions"][:15]
     if not rows:
         return "\n     (no clean data for this day yet — run the panel)\n"
     max_abs_net = max((abs(r["net"] or 0) for r in rows), default=0) or 1
     HALF = 28
+    n_days = max((r.get("spark_days") or 0 for r in rows), default=0)
     lines = [""]
     for r in rows:
         net = r["net"] or 0
         sign = "+" if net > 0 else ("-" if net < 0 else " ")
         bar_str = signed_bar(net, max_abs_net, half_width=HALF)
-        lines.append(f"  ${r['ticker']:<5}  {sign}{abs(net):<3}   {bar_str}")
+        spark = r.get("sparkline") or ("·" * n_days if n_days else "")
+        lines.append(f"  ${r['ticker']:<5}  {sign}{abs(net):<3}   {bar_str}  {spark}")
     lines.append("")
     return "\n".join(lines)
 
@@ -887,9 +890,13 @@ def render_provider_heading(provider: str) -> str:
 
 
 def provider_cell(row: dict, provider: str) -> str:
+    """Layered bull/bear cell. Bear gets a dim class so the eye reads bull first;
+    when bear is zero it fades further into the background. Returns raw HTML —
+    callers must not html-escape it."""
     bull = row.get(f"{provider}_bull") or 0
     bear = row.get(f"{provider}_bear") or 0
-    return f"{bull}/{bear}"
+    cls = "bear-zero" if bear == 0 else "bear"
+    return f'{bull}<span class="{cls}">/{bear}</span>'
 
 
 def render_first_sightings(rows: list[dict], providers: list[str]) -> str:
@@ -911,7 +918,7 @@ def render_first_sightings(rows: list[dict], providers: list[str]) -> str:
         lines.append(f"<td>{html.escape(r['first_seen'])}</td>")
         lines.append(f"<td>{html.escape(r.get('last_seen') or '-')}</td>")
         for provider in providers:
-            lines.append(f"<td class=\"num\">{html.escape(provider_cell(r, provider))}</td>")
+            lines.append(f"<td class=\"num\">{provider_cell(r, provider)}</td>")
         lines.append(f"<td class=\"num\">{sign}{abs(net)}</td>")
         lines.append(f"<td class=\"num\">{r.get('n') or 0}</td>")
         lines.append(f"<td class=\"num\">{r.get('days_seen') or 0}</td>")
@@ -949,7 +956,7 @@ def render_consensus(rows: list[dict], providers: list[str]) -> str:
         lines.append("<tr>")
         lines.append(f"<td>${html.escape(r['ticker'])}</td>")
         for provider in providers:
-            lines.append(f"<td class=\"num\">{html.escape(provider_cell(r, provider))}</td>")
+            lines.append(f"<td class=\"num\">{provider_cell(r, provider)}</td>")
         lines.append(f"<td class=\"num\">{total_bull-total_bear:+}</td>")
         lines.append(f"<td>{html.escape(verdict)}</td>")
         lines.append(f"<td>{html.escape(spark)}</td>")
@@ -1306,6 +1313,8 @@ HTML_INDEX_TMPL = """<!doctype html>
     border-bottom: 1px dashed var(--dim);
   }}
   .data-table .num {{ text-align: right; }}
+  .data-table .bear {{ color: var(--dim); }}
+  .data-table .bear-zero {{ color: var(--hair); }}
   .provider-head {{
     display: inline-flex; width: 42px; align-items: center; justify-content: center;
     vertical-align: middle;
@@ -1428,6 +1437,8 @@ HTML_TRENDS_TMPL = """<!doctype html>
     border-bottom: 1px dashed var(--dim);
   }}
   .data-table .num {{ text-align: right; }}
+  .data-table .bear {{ color: var(--dim); }}
+  .data-table .bear-zero {{ color: var(--hair); }}
   .provider-head {{
     display: inline-flex; width: 42px; align-items: center; justify-content: center;
     vertical-align: middle;
