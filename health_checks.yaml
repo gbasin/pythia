@@ -1,0 +1,47 @@
+# pythia health-check thresholds + alert routing.
+# Consumed by scripts/health_check.py at the end of every daily run.
+#
+# Two severities:
+#   critical -> something is broken now; pushed to your phone via ntfy AND
+#               filed as a GitHub issue.
+#   warn     -> quality drift worth triaging at the desk; GitHub issue only.
+#
+# Secrets (ntfy topic) come from the environment, never this file.
+
+baseline_days: 7        # prior clean runs used to compute drift baselines
+fresh_run_max_age_h: 26 # if no clean run newer than this -> critical "no run"
+
+checks:
+  # A provider that returned zero successful responses in the latest run.
+  # Catches the codex-auth-token-death class of outage.
+  provider_blackout:
+    severity: critical
+
+  # Fraction of the latest run's tuples that errored.
+  run_failure_rate:
+    severity: critical
+    max: 0.15
+
+  # Latest run's mentions-per-successful-response vs the baseline median.
+  # Catches format/extraction breakage (e.g. the $TICKER directive stops
+  # being honored) even when nothing errors.
+  mentions_per_response:
+    severity: warn
+    min_ratio: 0.5
+
+  # Classifier rows parked in needs_review (bad/unparseable judge output),
+  # as a fraction of the latest run's mentions.
+  classifier_needs_review:
+    severity: warn
+    max_ratio: 0.05
+
+transports:
+  ntfy:
+    enabled: true
+    # Topic is read from this env var (set in .env). If unset, ntfy is skipped.
+    topic_env: PYTHIA_NTFY_TOPIC
+    server: https://ntfy.sh
+  gh_issue:
+    enabled: true
+    repo: gbasin/pythia
+    label: pythia-health

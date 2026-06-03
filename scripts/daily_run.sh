@@ -35,4 +35,8 @@ fi
   /opt/homebrew/bin/uv run scripts/classify_mentions.py || true
   echo "--- rendering dashboard ---"
   /opt/homebrew/bin/uv run scripts/render_page.py
+  echo "--- health check ---"
+  # Inspects this run, pushes critical issues to ntfy + files GitHub issues.
+  # `|| true` so a transport hiccup never fails the pipeline.
+  /opt/homebrew/bin/uv run scripts/health_check.py || true
 } >> "$LOG" 2>&1

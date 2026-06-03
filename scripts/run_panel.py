@@ -500,9 +500,17 @@ TICKER_PAT = re.compile(r"\$([A-Z]{1,5}(?:\.[A-Z])?)\b")
 
 
 def detect_refusal(text: str | None) -> int:
+    """A genuine refusal declines to name any picks. The decline phrase alone
+    is not enough: substantive answers routinely contain a "I won't sugar-coat
+    this" aside while still recommending tickers. So we only count a refusal
+    when the decline phrase is present AND the response names no ticker at all.
+    (Validated against the full history: every 0-ticker match is a real soft
+    refusal; every ticker-bearing match is a false positive.)"""
     if not text:
         return 0
-    return 1 if REFUSAL_PAT.search(text) else 0
+    if not REFUSAL_PAT.search(text):
+        return 0
+    return 0 if TICKER_PAT.search(text) else 1
 
 
 def extract_mentions(response_id: int, text: str | None,
