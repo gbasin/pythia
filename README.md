@@ -50,7 +50,8 @@ uv run scripts/run_panel.py --prompt-id name_01 --persona-id speculator \
     --model-config-id claude_opus        # one tuple, for smoke-testing
 uv run scripts/classify_mentions.py       # label sentiment on new mentions
 uv run scripts/classify_mentions.py --reclassify   # nuke + redo all labels
-uv run scripts/render_page.py             # rebuild index.html + trends.html + prompts.html
+uv run scripts/render_page.py             # rebuild index.html + trends.html + alpha.html + prompts.html
+uv run scripts/benchmark_alpha.py --rebuild-signals # 1d open→close alpha check
 ```
 
 ## panel composition
@@ -108,6 +109,7 @@ after a run, view at:
 three pages:
 - `/` — current snapshot + trend highlights
 - `/trends.html` — rolling ranks, first sightings, provider consensus, day index
+- `/alpha.html` — paper benchmark: top-20 recommendation flow vs all mentioned
 - `/prompts.html` — full prompts + personas + an example of what the model literally sees
 
 ## design decisions
@@ -145,6 +147,9 @@ everything lives in `db/panel.sqlite`. schema highlights:
 - `mentions` — one row per unique ticker per response, with classifier
   `sentiment_hint` ∈ {bullish, bearish, neutral, context} and 1-indexed
   `position`
+- `daily_signals`, `prices`, `forward_returns` — lazily created by
+  `scripts/benchmark_alpha.py` for the simple top-20 vs all-mentioned
+  next-session open→close benchmark
 
 ## known limitations (later versions)
 

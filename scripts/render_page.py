@@ -32,6 +32,7 @@ OUT_DIR = Path(os.environ.get("PYTHIA_DIST_DIR", ROOT / "dist"))
 OUT_PATH = OUT_DIR / "index.html"
 OUT_PROMPTS_PATH = OUT_DIR / "prompts.html"
 OUT_TRENDS_PATH = OUT_DIR / "trends.html"
+OUT_ALPHA_PATH = OUT_DIR / "alpha.html"
 
 # Mirrors TOOLS_OFF_SUFFIX in scripts/run_panel.py — duplicated so the
 # review page can show the exact text models see for tools_off runs.
@@ -690,6 +691,203 @@ def fetch_ticker_series(con, tickers: list[str], days_back: int = 14) -> tuple[l
     return days, {t: [by_ticker[t].get(d) for d in days] for t in tickers}
 
 
+def table_exists(con, name: str) -> bool:
+    row = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (name,),
+    ).fetchone()
+    return bool(row)
+
+
+def fetch_alpha(con, top_n: int = 20) -> dict:
+    """Return the simple open→close benchmark from benchmark_alpha.py tables.
+
+    render_page.py intentionally does not fetch prices or mutate the DB. The
+    daily benchmark script owns data refresh; this renderer only visualizes
+    whatever benchmark rows are already cached.
+    """
+    required = ("daily_signals", "forward_returns", "prices")
+    if not all(table_exists(con, t) for t in required):
+        return dict(available=False, rows=[], summary={}, top_n=top_n)
+
+    rows = [
+        dict(r)
+        for r in con.execute(
+            """
+            WITH ranked AS (
+              SELECT ds.*,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY ds.signal_date
+                       ORDER BY ds.net_score DESC, ds.mentions DESC, ds.ticker
+                     ) AS rk
+              FROM daily_signals ds
+            ),
+            day_baskets AS (
+              SELECT r.signal_date,
+                     fr.entry_date AS trade_date,
+                     AVG(CASE WHEN r.rk <= ? THEN fr.return_pct END) AS top_return,
+                     AVG(fr.return_pct) AS all_return,
+                     COUNT(CASE WHEN r.rk <= ? THEN 1 END) AS top_available,
+                     COUNT(*) AS all_available
+              FROM ranked r
+              JOIN forward_returns fr
+                ON fr.signal_date = r.signal_date
+               AND fr.ticker = r.ticker
+               AND fr.horizon_days = 1
+              GROUP BY r.signal_date, fr.entry_date
+            )
+            SELECT db.signal_date,
+                   db.trade_date,
+                   db.top_return,
+                   db.all_return,
+                   db.top_return - db.all_return AS excess_return,
+                   db.top_available,
+                   db.all_available,
+                   CASE WHEN spy.open IS NOT NULL AND spy.open != 0
+                        THEN spy.close / spy.open - 1 END AS spy_return,
+                   CASE WHEN qqq.open IS NOT NULL AND qqq.open != 0
+                        THEN qqq.close / qqq.open - 1 END AS qqq_return
+            FROM day_baskets db
+            LEFT JOIN prices spy
+              ON spy.ticker='SPY' AND spy.source='yfinance' AND spy.date=db.trade_date
+            LEFT JOIN prices qqq
+              ON qqq.ticker='QQQ' AND qqq.source='yfinance' AND qqq.date=db.trade_date
+            ORDER BY db.signal_date
+            """,
+            (top_n, top_n),
+        ).fetchall()
+    ]
+    if not rows:
+        return dict(available=False, rows=[], summary={}, top_n=top_n)
+
+    cum = 0.0
+    cum_vs_qqq = 0.0
+    for i, r in enumerate(rows, start=1):
+        top_return = r["top_return"] or 0.0
+        qqq_return = r["qqq_return"] or 0.0
+        cum += r["excess_return"] or 0.0
+        cum_vs_qqq += top_return - qqq_return
+        r["cum_excess"] = cum
+        r["cum_top_vs_qqq"] = cum_vs_qqq
+        r["running_top"] = sum(x["top_return"] for x in rows[:i]) / i
+        r["running_all"] = sum(x["all_return"] for x in rows[:i]) / i
+        r["running_excess"] = sum(x["excess_return"] for x in rows[:i]) / i
+
+    def avg(key: str) -> float | None:
+        vals = [r[key] for r in rows if r.get(key) is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    summary = dict(
+        n_days=len(rows),
+        top_avg=avg("top_return"),
+        all_avg=avg("all_return"),
+        excess_avg=avg("excess_return"),
+        spy_avg=avg("spy_return"),
+        qqq_avg=avg("qqq_return"),
+        cum_excess=rows[-1]["cum_excess"],
+        cum_top_vs_qqq=rows[-1]["cum_top_vs_qqq"],
+        latest_signal_date=rows[-1]["signal_date"],
+        latest_trade_date=rows[-1]["trade_date"],
+    )
+    return dict(available=True, rows=rows, summary=summary, top_n=top_n)
+
+
+def fmt_pct(value: float | None, width: int = 7) -> str:
+    if value is None:
+        return "n/a".rjust(width)
+    return f"{value * 100:{width}.2f}%"
+
+
+def render_alpha_summary(alpha: dict) -> str:
+    if not alpha.get("available"):
+        return "  alpha benchmark not built yet. run: uv run scripts/benchmark_alpha.py --rebuild-signals"
+    s = alpha["summary"]
+    return (
+        f"  days                 {s['n_days']:>6}\n"
+        f"  top{alpha['top_n']:<2} avg            {fmt_pct(s['top_avg'])}\n"
+        f"  all-mentioned avg    {fmt_pct(s['all_avg'])}\n"
+        f"  excess avg           {fmt_pct(s['excess_avg'])}\n"
+        f"  cumulative excess    {fmt_pct(s['cum_excess'])}\n"
+        f"  cumulative vs QQQ    {fmt_pct(s['cum_top_vs_qqq'])}\n"
+        f"  SPY avg              {fmt_pct(s['spy_avg'])}\n"
+        f"  QQQ avg              {fmt_pct(s['qqq_avg'])}\n"
+        f"  latest trade date    {s['latest_trade_date']}"
+    )
+
+
+def render_alpha_table(alpha: dict) -> str:
+    rows = alpha.get("rows") or []
+    if not rows:
+        return "  (no benchmarkable rows yet)"
+    lines = [
+        "  signal_date  trade_date   top_avail  all_avail  top20_1d  all_1d   excess   cum_excess  cum_vs_QQQ   SPY      QQQ",
+        "  ----------   ----------   ---------  ---------  --------  ------   -------  ----------  ----------   ------   ------",
+    ]
+    for r in rows:
+        lines.append(
+            f"  {r['signal_date']}   {r['trade_date']}   "
+            f"{r['top_available']:>9}  {r['all_available']:>9}  "
+            f"{fmt_pct(r['top_return'])}  {fmt_pct(r['all_return'])}  "
+            f"{fmt_pct(r['excess_return'])}  {fmt_pct(r['cum_excess'], 8)}  "
+            f"{fmt_pct(r['cum_top_vs_qqq'], 8)}  "
+            f"{fmt_pct(r['spy_return'])}  {fmt_pct(r['qqq_return'])}"
+        )
+    return "\n".join(lines)
+
+
+def render_alpha_svg(alpha: dict, width: int = 900, height: int = 220,
+                     compact: bool = False) -> str:
+    rows = alpha.get("rows") or []
+    if not rows:
+        return '<pre class="tbl">  (alpha benchmark not built yet)</pre>'
+
+    left, right, top, bottom = 48, 16, 22, 34
+    chart_w = width - left - right
+    chart_h = height - top - bottom
+    primary_values = [r["cum_excess"] for r in rows]
+    qqq_values = [r["cum_top_vs_qqq"] for r in rows]
+    max_abs = max([abs(v) for v in primary_values + qqq_values] or [0.01]) or 0.01
+    y_mid = top + chart_h / 2
+
+    def x_at(i: int) -> float:
+        if len(primary_values) == 1:
+            return left + chart_w
+        return left + chart_w * i / (len(primary_values) - 1)
+
+    def y_at(v: float) -> float:
+        return y_mid - (v / max_abs) * (chart_h / 2)
+
+    primary_points = " ".join(f"{x_at(i):.1f},{y_at(v):.1f}" for i, v in enumerate(primary_values))
+    qqq_points = " ".join(f"{x_at(i):.1f},{y_at(v):.1f}" for i, v in enumerate(qqq_values))
+    zero = y_mid
+    latest = primary_values[-1]
+    latest_qqq = qqq_values[-1]
+    latest_x = x_at(len(primary_values) - 1)
+    latest_y = y_at(latest)
+    color = "#6ad08a" if latest >= 0 else "#e36a6a"
+    qqq_color = "#4a9263" if latest_qqq >= 0 else "#9f5757"
+    label = f"vs all {latest * 100:+.2f}% · vs QQQ {latest_qqq * 100:+.2f}%"
+    dates = f"{rows[0]['signal_date']} → {rows[-1]['signal_date']}"
+    title = "cumulative top20 excess, next-session open→close"
+    title_y = 16 if compact else 18
+
+    return f"""<svg class="alpha-svg" viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(title)}">
+  <line x1="{left}" y1="{zero:.1f}" x2="{width - right}" y2="{zero:.1f}" class="axis-zero"/>
+  <line x1="{left}" y1="{top}" x2="{left}" y2="{height - bottom}" class="axis"/>
+  <polyline points="{qqq_points}" fill="none" stroke="{qqq_color}" stroke-width="1.5" stroke-dasharray="5 5" opacity="0.78" vector-effect="non-scaling-stroke"/>
+  <polyline points="{primary_points}" fill="none" stroke="{color}" stroke-width="2.2" vector-effect="non-scaling-stroke"/>
+  <circle cx="{latest_x:.1f}" cy="{latest_y:.1f}" r="3.5" fill="{color}"/>
+  <text x="{left}" y="{title_y}" class="chart-title">{html.escape(title)}</text>
+  <text x="{width - right}" y="{title_y}" text-anchor="end" class="chart-label">{html.escape(label)}</text>
+  <line x1="{left}" y1="{height - 24}" x2="{left + 22}" y2="{height - 24}" stroke="{color}" stroke-width="2.2"/>
+  <text x="{left + 30}" y="{height - 20}" class="chart-dim">vs all-mentioned</text>
+  <line x1="{left + 178}" y1="{height - 24}" x2="{left + 200}" y2="{height - 24}" stroke="{qqq_color}" stroke-width="1.5" stroke-dasharray="5 5"/>
+  <text x="{left + 208}" y="{height - 20}" class="chart-dim">vs QQQ</text>
+  <text x="{left}" y="{height - 10}" class="chart-dim">{html.escape(dates)}</text>
+  <text x="{width - right}" y="{height - 10}" text-anchor="end" class="chart-dim">{len(rows)} benchmark days</text>
+</svg>"""
+
+
 def indent2(text: str) -> str:
     return textwrap.indent(text, "  ")
 
@@ -1151,8 +1349,9 @@ HTML_TMPL = """<!doctype html>
   <a href="#why">why</a>
   <a href="#how">how it works</a>
   <a href="#ops">operational</a>
-  <a href="trends.html">▸ trends</a>
-  <a href="prompts.html">▸ prompts</a>
+  <a href="{root_prefix}trends.html">▸ trends</a>
+  <a href="{root_prefix}alpha.html">▸ alpha</a>
+  <a href="{root_prefix}prompts.html">▸ prompts</a>
 </nav>
 
 <section id="findings">
@@ -1282,6 +1481,23 @@ HTML_INDEX_TMPL = """<!doctype html>
   .hero-chart pre {{
     font-size: 14px; line-height: 1.55; white-space: pre; overflow-x: auto;
   }}
+  .alpha-brief {{
+    margin: 26px 0 12px;
+    padding: 14px 0 12px;
+    border-top: 1px dashed var(--hair);
+    border-bottom: 1px dashed var(--hair);
+  }}
+  .alpha-brief .label {{
+    color: var(--accent); font-weight: 700; letter-spacing: 1px; margin-bottom: 8px;
+  }}
+  .alpha-brief .more {{ margin-top: 6px; }}
+  .alpha-svg {{ width: 100%; height: auto; display: block; }}
+  .alpha-svg .axis {{ stroke: var(--hair); stroke-width: 1; }}
+  .alpha-svg .axis-zero {{ stroke: var(--dim); stroke-width: 1; stroke-dasharray: 3 5; opacity: 0.75; }}
+  .alpha-svg text {{ font: 12px 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace, monospace; }}
+  .alpha-svg .chart-title {{ fill: var(--fg); }}
+  .alpha-svg .chart-label {{ fill: var(--accent); font-weight: 700; }}
+  .alpha-svg .chart-dim {{ fill: var(--dim); }}
   details.explainer {{
     margin: 12px 0 28px;
     padding: 10px 14px;
@@ -1345,6 +1561,12 @@ HTML_INDEX_TMPL = """<!doctype html>
 
 {day_nav}
 
+<section class="alpha-brief">
+  <div class="label">ALPHA CHECK · cumulative top20 excess</div>
+  {alpha_chart}
+  <div class="more">{alpha_teaser} → <a href="alpha.html">full benchmark</a></div>
+</section>
+
 <section class="hero-chart">
   <div class="label">NET AI RECOMMENDATION FLOW · {current_day}</div>
   <div class="scroll"><pre>{hero_chart}</pre></div>
@@ -1374,7 +1596,7 @@ HTML_INDEX_TMPL = """<!doctype html>
 </section>
 
 <div class="meta">
-  <pre>  detail per day  → <a href="day/{current_day}.html">today's deep view</a>  ·  <a href="trends.html">trends</a>  ·  <a href="prompts.html">methodology</a></pre>
+  <pre>  detail per day  → <a href="day/{current_day}.html">today's deep view</a>  ·  <a href="trends.html">trends</a>  ·  <a href="alpha.html">alpha</a>  ·  <a href="prompts.html">methodology</a></pre>
   <pre>  {n_clean_days} clean days · {n_total_responses} responses · rendered {rendered}</pre>
   <pre>{footer}</pre>
 </div>
@@ -1474,6 +1696,7 @@ HTML_TRENDS_TMPL = """<!doctype html>
   <a href="#first-sightings">first sightings</a>
   <a href="#consensus">consensus</a>
   <a href="#days">all days</a>
+  <a href="alpha.html">▸ alpha</a>
   <a href="prompts.html">▸ prompts</a>
 </nav>
 
@@ -1509,6 +1732,104 @@ HTML_TRENDS_TMPL = """<!doctype html>
   <h2>▸ all clean days</h2>
   <pre class="intro">{intro_days}</pre>
   <div class="scroll"><pre class="tbl">{days_index}</pre></div>
+</section>
+
+<div class="meta"><pre>{footer}</pre></div>
+
+</body>
+</html>
+"""
+
+
+HTML_ALPHA_TMPL = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pythia — alpha</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {{
+    --bg: #0a0a0a; --fg: #e6e4dd; --dim: #7a766b;
+    --accent: #6ad08a; --accent-dim: #4a9263; --hair: #1a1a1a;
+  }}
+  html, body {{ background: var(--bg); color: var(--fg); margin: 0; padding: 0; }}
+  body {{
+    font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace,
+                 SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13.5px; line-height: 1.62;
+    padding: 40px 24px 80px; max-width: 1000px; margin: 0 auto;
+  }}
+  header {{ margin-bottom: 6px; }}
+  h1 {{ font-size: 13.5px; margin: 0; letter-spacing: 2px; font-weight: 700; }}
+  .tag {{ color: var(--dim); }}
+  .meta-top {{ color: var(--dim); font-size: 12px; margin-top: 6px; }}
+  pre {{ margin: 0; white-space: pre-wrap; word-break: keep-all; }}
+  pre.tbl {{ white-space: pre; }}
+  section {{ margin-top: 36px; }}
+  h2 {{
+    font-size: 13.5px; color: var(--accent); letter-spacing: 1px;
+    font-weight: 700; margin: 0 0 12px 0;
+  }}
+  .intro {{ color: var(--dim); margin: 0 0 14px 0; }}
+  nav {{
+    margin-top: 14px; color: var(--dim);
+    border-top: 1px dashed var(--hair); border-bottom: 1px dashed var(--hair);
+    padding: 8px 0;
+  }}
+  nav a {{ color: var(--dim); margin-right: 14px; text-decoration: none; }}
+  nav a:hover {{ color: var(--accent); }}
+  .chart-wrap {{
+    margin-top: 24px;
+    padding: 18px 0;
+    border-top: 2px solid var(--accent);
+    border-bottom: 2px solid var(--accent);
+  }}
+  .alpha-svg {{ width: 100%; height: auto; display: block; }}
+  .alpha-svg .axis {{ stroke: var(--hair); stroke-width: 1; }}
+  .alpha-svg .axis-zero {{ stroke: var(--dim); stroke-width: 1; stroke-dasharray: 3 5; opacity: 0.75; }}
+  .alpha-svg text {{ font: 12px 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace, monospace; }}
+  .alpha-svg .chart-title {{ fill: var(--fg); }}
+  .alpha-svg .chart-label {{ fill: var(--accent); font-weight: 700; }}
+  .alpha-svg .chart-dim {{ fill: var(--dim); }}
+  .scroll {{ overflow-x: auto; }}
+  .meta {{
+    color: var(--dim); margin-top: 56px; padding-top: 20px;
+    border-top: 1px dashed var(--hair); font-size: 12px;
+  }}
+  ::selection {{ background: var(--accent); color: var(--bg); }}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PYTHIA / alpha</h1>
+  <div class="tag">// paper benchmark: does recommendation intensity trade?</div>
+  <div class="meta-top">rendered {rendered}</div>
+</header>
+
+<nav>
+  <a href="index.html">← back to dashboard</a>
+  <a href="trends.html">trends</a>
+  <a href="prompts.html">methodology</a>
+</nav>
+
+<section class="chart-wrap">
+  {alpha_chart}
+</section>
+
+<section>
+  <h2>▸ benchmark definition</h2>
+  <pre class="intro">{definition}</pre>
+</section>
+
+<section>
+  <h2>▸ running averages</h2>
+  <div class="scroll"><pre class="tbl">{summary}</pre></div>
+</section>
+
+<section>
+  <h2>▸ daily rows</h2>
+  <div class="scroll"><pre class="tbl">{table}</pre></div>
 </section>
 
 <div class="meta"><pre>{footer}</pre></div>
@@ -1674,7 +1995,18 @@ def render_day_nav(current: str, days: list[str], is_index: bool) -> str:
     )
 
 
-def render_index_page(d: dict, trends: dict, day: str, days: list[str],
+def render_alpha_teaser(alpha: dict) -> str:
+    if not alpha.get("available"):
+        return "benchmark waiting for price cache"
+    s = alpha["summary"]
+    return (
+        f"top{alpha['top_n']} {fmt_pct(s['top_avg']).strip()} avg · "
+        f"all-mentioned {fmt_pct(s['all_avg']).strip()} · "
+        f"excess {fmt_pct(s['excess_avg']).strip()} over {s['n_days']} days"
+    )
+
+
+def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[str],
                       n_total_responses: int) -> str:
     """The /index.html landing page. Stripped down: today's hero chart, three
     compact trend tables, one collapsible explainer. Detailed per-day data
@@ -1685,6 +2017,8 @@ def render_index_page(d: dict, trends: dict, day: str, days: list[str],
         n_clean_days=len(days),
         n_total_responses=n_total_responses,
         day_nav=render_day_nav(day, days, is_index=True),
+        alpha_chart=render_alpha_svg(alpha, compact=True),
+        alpha_teaser=html.escape(render_alpha_teaser(alpha)),
         hero_chart=html.escape(render_hero_chart(d)),
         explainer=html.escape(EXPLAINER),
         first_sightings=render_first_sightings(
@@ -1708,6 +2042,7 @@ def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
         tagline=html.escape(TAGLINE),
         current_day=html.escape(day),
         day_nav=render_day_nav(day, days, is_index),
+        root_prefix="../" if not is_index else "",
         rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         panel_version=html.escape(panel_version),
         hero_chart=html.escape(render_hero_chart(d)),
@@ -1731,6 +2066,28 @@ def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
         footer=html.escape(FOOTER),
         db_rel=html.escape(str(DB_PATH.relative_to(ROOT) if DB_PATH.is_relative_to(ROOT) else DB_PATH)),
         root=html.escape(str(ROOT)),
+    )
+
+
+def render_alpha_page(alpha: dict) -> str:
+    definition = (
+        "signal date = clean panel run timestamp converted to ET calendar date\n"
+        "basket = top 20 tickers by daily net score (bullish mentions - bearish mentions)\n"
+        "baseline = every valid mentioned ticker that day, equal-weighted\n"
+        "entry = next market session open\n"
+        "exit = same market session close\n"
+        "excess = top20 return - all-mentioned return\n\n"
+        "this is a paper benchmark, not a tradable recommendation. it is meant "
+        "to answer whether pythia's own ranking contains incremental signal "
+        "before adding sector, factor, liquidity, or prompt-seed controls."
+    )
+    return HTML_ALPHA_TMPL.format(
+        rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        alpha_chart=render_alpha_svg(alpha),
+        definition=html.escape(definition),
+        summary=html.escape(render_alpha_summary(alpha)),
+        table=html.escape(render_alpha_table(alpha)),
+        footer=html.escape(FOOTER),
     )
 
 
@@ -1771,12 +2128,13 @@ def main() -> int:
         # Global panel data (for prompts subpage) + cumulative trends.
         d = fetch(con, day=None)
         trends = fetch_trends(con)
+        alpha = fetch_alpha(con)
         n_total_responses = sum(r.get("n_responses") or 0 for r in trends["days_index"])
 
         # Index = focused landing: today's hero + trend highlights.
         latest = days[0]
         d_latest = fetch(con, day=latest)
-        index_page = render_index_page(d_latest, trends, latest, days, n_total_responses)
+        index_page = render_index_page(d_latest, trends, alpha, latest, days, n_total_responses)
         OUT_PATH.write_text(index_page, encoding="utf-8")
         print(f"wrote {OUT_PATH}  ({len(index_page)} bytes)  [index = {latest}, focused]")
     finally:
@@ -1821,6 +2179,11 @@ def main() -> int:
     )
     OUT_TRENDS_PATH.write_text(trends_page, encoding="utf-8")
     print(f"wrote {OUT_TRENDS_PATH}  ({len(trends_page)} bytes)")
+
+    # ── alpha benchmark subpage ──
+    alpha_page = render_alpha_page(alpha)
+    OUT_ALPHA_PATH.write_text(alpha_page, encoding="utf-8")
+    print(f"wrote {OUT_ALPHA_PATH}  ({len(alpha_page)} bytes)")
 
     # ── prompts subpage ──
     preamble = load_preamble()

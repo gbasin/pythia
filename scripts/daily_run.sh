@@ -33,6 +33,8 @@ fi
   echo "=== panel run finished $(date -u +'%Y-%m-%dT%H:%M:%SZ') ==="
   echo "--- classifying sentiment ---"
   /opt/homebrew/bin/uv run scripts/classify_mentions.py || true
+  echo "--- benchmarking alpha ---"
+  /opt/homebrew/bin/uv run scripts/benchmark_alpha.py --rebuild-signals || true
   echo "--- rendering dashboard ---"
   /opt/homebrew/bin/uv run scripts/render_page.py
   echo "--- health check ---"
