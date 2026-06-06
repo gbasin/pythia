@@ -557,31 +557,29 @@ def print_results(results: list[DayResult]) -> None:
 
     print()
     print(
-        "signal_date  trade_date   top_avail  all_avail  "
-        "top20_1d  all_1d   excess   SPY      QQQ"
+        "signal_date  trade_date   top_avail  "
+        "top20_1d  QQQ      vs_QQQ"
     )
     for r in results:
+        vs_qqq = (r.top_return - r.qqq_return) if r.qqq_return is not None else None
         print(
             f"{r.signal_date}  {r.trade_date}  "
-            f"{r.top_available:>9}  {r.all_available:>9}  "
-            f"{pct(r.top_return)} {pct(r.all_return)} {pct(r.excess_return)} "
-            f"{pct(r.spy_return)} {pct(r.qqq_return)}"
+            f"{r.top_available:>9}  "
+            f"{pct(r.top_return)} {pct(r.qqq_return)} {pct(vs_qqq)}"
         )
 
     top_avg = basket_average([r.top_return for r in results])
-    all_avg = basket_average([r.all_return for r in results])
-    excess_avg = basket_average([r.excess_return for r in results])
-    spy_avg = basket_average([r.spy_return for r in results if r.spy_return is not None])
     qqq_avg = basket_average([r.qqq_return for r in results if r.qqq_return is not None])
+    vs_qqq_avg = basket_average(
+        [r.top_return - r.qqq_return for r in results if r.qqq_return is not None]
+    )
 
     print()
     print(
         f"running average over {len(results)} day(s): "
         f"top20={pct(top_avg).strip()}  "
-        f"all-mentioned={pct(all_avg).strip()}  "
-        f"excess={pct(excess_avg).strip()}  "
-        f"SPY={pct(spy_avg).strip()}  "
-        f"QQQ={pct(qqq_avg).strip()}"
+        f"QQQ={pct(qqq_avg).strip()}  "
+        f"vs QQQ={pct(vs_qqq_avg).strip()}"
     )
 
 

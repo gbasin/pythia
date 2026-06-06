@@ -726,9 +726,7 @@ def fetch_alpha(con, top_n: int = 20) -> dict:
               SELECT r.signal_date,
                      fr.entry_date AS trade_date,
                      AVG(CASE WHEN r.rk <= ? THEN fr.return_pct END) AS top_return,
-                     AVG(fr.return_pct) AS all_return,
-                     COUNT(CASE WHEN r.rk <= ? THEN 1 END) AS top_available,
-                     COUNT(*) AS all_available
+                     COUNT(CASE WHEN r.rk <= ? THEN 1 END) AS top_available
               FROM ranked r
               JOIN forward_returns fr
                 ON fr.signal_date = r.signal_date
@@ -739,17 +737,10 @@ def fetch_alpha(con, top_n: int = 20) -> dict:
             SELECT db.signal_date,
                    db.trade_date,
                    db.top_return,
-                   db.all_return,
-                   db.top_return - db.all_return AS excess_return,
                    db.top_available,
-                   db.all_available,
-                   CASE WHEN spy.open IS NOT NULL AND spy.open != 0
-                        THEN spy.close / spy.open - 1 END AS spy_return,
                    CASE WHEN qqq.open IS NOT NULL AND qqq.open != 0
                         THEN qqq.close / qqq.open - 1 END AS qqq_return
             FROM day_baskets db
-            LEFT JOIN prices spy
-              ON spy.ticker='SPY' AND spy.source='yfinance' AND spy.date=db.trade_date
             LEFT JOIN prices qqq
               ON qqq.ticker='QQQ' AND qqq.source='yfinance' AND qqq.date=db.trade_date
             ORDER BY db.signal_date
@@ -760,18 +751,19 @@ def fetch_alpha(con, top_n: int = 20) -> dict:
     if not rows:
         return dict(available=False, rows=[], summary={}, top_n=top_n)
 
-    cum = 0.0
+    # Two series the dashboard cares about: the raw (unhedged) top20 basket
+    # return, and its excess over QQQ — the highlighted benchmark. Both are
+    # accumulated additively across sessions.
+    cum_top = 0.0
     cum_vs_qqq = 0.0
-    for i, r in enumerate(rows, start=1):
+    for r in rows:
         top_return = r["top_return"] or 0.0
         qqq_return = r["qqq_return"] or 0.0
-        cum += r["excess_return"] or 0.0
-        cum_vs_qqq += top_return - qqq_return
-        r["cum_excess"] = cum
+        r["excess_vs_qqq"] = top_return - qqq_return
+        cum_top += top_return
+        cum_vs_qqq += r["excess_vs_qqq"]
+        r["cum_top"] = cum_top
         r["cum_top_vs_qqq"] = cum_vs_qqq
-        r["running_top"] = sum(x["top_return"] for x in rows[:i]) / i
-        r["running_all"] = sum(x["all_return"] for x in rows[:i]) / i
-        r["running_excess"] = sum(x["excess_return"] for x in rows[:i]) / i
 
     def avg(key: str) -> float | None:
         vals = [r[key] for r in rows if r.get(key) is not None]
@@ -780,11 +772,9 @@ def fetch_alpha(con, top_n: int = 20) -> dict:
     summary = dict(
         n_days=len(rows),
         top_avg=avg("top_return"),
-        all_avg=avg("all_return"),
-        excess_avg=avg("excess_return"),
-        spy_avg=avg("spy_return"),
         qqq_avg=avg("qqq_return"),
-        cum_excess=rows[-1]["cum_excess"],
+        vs_qqq_avg=avg("excess_vs_qqq"),
+        cum_top=rows[-1]["cum_top"],
         cum_top_vs_qqq=rows[-1]["cum_top_vs_qqq"],
         latest_signal_date=rows[-1]["signal_date"],
         latest_trade_date=rows[-1]["trade_date"],
@@ -805,12 +795,10 @@ def render_alpha_summary(alpha: dict) -> str:
     return (
         f"  days                 {s['n_days']:>6}\n"
         f"  top{alpha['top_n']:<2} avg            {fmt_pct(s['top_avg'])}\n"
-        f"  all-mentioned avg    {fmt_pct(s['all_avg'])}\n"
-        f"  excess avg           {fmt_pct(s['excess_avg'])}\n"
-        f"  cumulative excess    {fmt_pct(s['cum_excess'])}\n"
-        f"  cumulative vs QQQ    {fmt_pct(s['cum_top_vs_qqq'])}\n"
-        f"  SPY avg              {fmt_pct(s['spy_avg'])}\n"
         f"  QQQ avg              {fmt_pct(s['qqq_avg'])}\n"
+        f"  vs QQQ avg           {fmt_pct(s['vs_qqq_avg'])}\n"
+        f"  cumulative top{alpha['top_n']:<2}    {fmt_pct(s['cum_top'])}\n"
+        f"  cumulative vs QQQ    {fmt_pct(s['cum_top_vs_qqq'])}\n"
         f"  latest trade date    {s['latest_trade_date']}"
     )
 
@@ -819,18 +807,18 @@ def render_alpha_table(alpha: dict) -> str:
     rows = alpha.get("rows") or []
     if not rows:
         return "  (no benchmarkable rows yet)"
+    n = alpha.get("top_n", 20)
     lines = [
-        "  signal_date  trade_date   top_avail  all_avail  top20_1d  all_1d   excess   cum_excess  cum_vs_QQQ   SPY      QQQ",
-        "  ----------   ----------   ---------  ---------  --------  ------   -------  ----------  ----------   ------   ------",
+        f"  signal_date  trade_date   top_avail  top{n}_1d  QQQ      vs_QQQ   cum_top{n}  cum_vs_QQQ",
+        "  ----------   ----------   ---------  -------  ------   ------   --------  ----------",
     ]
     for r in rows:
         lines.append(
             f"  {r['signal_date']}   {r['trade_date']}   "
-            f"{r['top_available']:>9}  {r['all_available']:>9}  "
-            f"{fmt_pct(r['top_return'])}  {fmt_pct(r['all_return'])}  "
-            f"{fmt_pct(r['excess_return'])}  {fmt_pct(r['cum_excess'], 8)}  "
-            f"{fmt_pct(r['cum_top_vs_qqq'], 8)}  "
-            f"{fmt_pct(r['spy_return'])}  {fmt_pct(r['qqq_return'])}"
+            f"{r['top_available']:>9}  "
+            f"{fmt_pct(r['top_return'])}  {fmt_pct(r['qqq_return'])}  "
+            f"{fmt_pct(r['excess_vs_qqq'])}  {fmt_pct(r['cum_top'], 8)}  "
+            f"{fmt_pct(r['cum_top_vs_qqq'], 8)}"
         )
     return "\n".join(lines)
 
@@ -841,12 +829,15 @@ def render_alpha_svg(alpha: dict, width: int = 900, height: int = 220,
     if not rows:
         return '<pre class="tbl">  (alpha benchmark not built yet)</pre>'
 
+    n = alpha.get("top_n", 20)
     left, right, top, bottom = 48, 16, 22, 34
     chart_w = width - left - right
     chart_h = height - top - bottom
-    primary_values = [r["cum_excess"] for r in rows]
-    qqq_values = [r["cum_top_vs_qqq"] for r in rows]
-    max_abs = max([abs(v) for v in primary_values + qqq_values] or [0.01]) or 0.01
+    # Primary (highlighted): cumulative top-N excess over QQQ. Secondary: the
+    # raw unhedged top-N basket return.
+    primary_values = [r["cum_top_vs_qqq"] for r in rows]
+    raw_values = [r["cum_top"] for r in rows]
+    max_abs = max([abs(v) for v in primary_values + raw_values] or [0.01]) or 0.01
     y_mid = top + chart_h / 2
 
     def x_at(i: int) -> float:
@@ -858,31 +849,31 @@ def render_alpha_svg(alpha: dict, width: int = 900, height: int = 220,
         return y_mid - (v / max_abs) * (chart_h / 2)
 
     primary_points = " ".join(f"{x_at(i):.1f},{y_at(v):.1f}" for i, v in enumerate(primary_values))
-    qqq_points = " ".join(f"{x_at(i):.1f},{y_at(v):.1f}" for i, v in enumerate(qqq_values))
+    raw_points = " ".join(f"{x_at(i):.1f},{y_at(v):.1f}" for i, v in enumerate(raw_values))
     zero = y_mid
     latest = primary_values[-1]
-    latest_qqq = qqq_values[-1]
+    latest_raw = raw_values[-1]
     latest_x = x_at(len(primary_values) - 1)
     latest_y = y_at(latest)
     color = "#6ad08a" if latest >= 0 else "#e36a6a"
-    qqq_color = "#4a9263" if latest_qqq >= 0 else "#9f5757"
-    label = f"vs all {latest * 100:+.2f}% · vs QQQ {latest_qqq * 100:+.2f}%"
+    raw_color = "#4a9263" if latest_raw >= 0 else "#9f5757"
+    label = f"vs QQQ {latest * 100:+.2f}% · top{n} {latest_raw * 100:+.2f}%"
     dates = f"{rows[0]['signal_date']} → {rows[-1]['signal_date']}"
-    title = "cumulative top20 excess, next-session open→close"
+    title = f"cumulative top{n} vs QQQ, next-session open→close"
     title_y = 16 if compact else 18
 
     return f"""<svg class="alpha-svg" viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(title)}">
   <line x1="{left}" y1="{zero:.1f}" x2="{width - right}" y2="{zero:.1f}" class="axis-zero"/>
   <line x1="{left}" y1="{top}" x2="{left}" y2="{height - bottom}" class="axis"/>
-  <polyline points="{qqq_points}" fill="none" stroke="{qqq_color}" stroke-width="1.5" stroke-dasharray="5 5" opacity="0.78" vector-effect="non-scaling-stroke"/>
+  <polyline points="{raw_points}" fill="none" stroke="{raw_color}" stroke-width="1.5" stroke-dasharray="5 5" opacity="0.78" vector-effect="non-scaling-stroke"/>
   <polyline points="{primary_points}" fill="none" stroke="{color}" stroke-width="2.2" vector-effect="non-scaling-stroke"/>
   <circle cx="{latest_x:.1f}" cy="{latest_y:.1f}" r="3.5" fill="{color}"/>
   <text x="{left}" y="{title_y}" class="chart-title">{html.escape(title)}</text>
   <text x="{width - right}" y="{title_y}" text-anchor="end" class="chart-label">{html.escape(label)}</text>
   <line x1="{left}" y1="{height - 24}" x2="{left + 22}" y2="{height - 24}" stroke="{color}" stroke-width="2.2"/>
-  <text x="{left + 30}" y="{height - 20}" class="chart-dim">vs all-mentioned</text>
-  <line x1="{left + 178}" y1="{height - 24}" x2="{left + 200}" y2="{height - 24}" stroke="{qqq_color}" stroke-width="1.5" stroke-dasharray="5 5"/>
-  <text x="{left + 208}" y="{height - 20}" class="chart-dim">vs QQQ</text>
+  <text x="{left + 30}" y="{height - 20}" class="chart-dim">vs QQQ</text>
+  <line x1="{left + 120}" y1="{height - 24}" x2="{left + 142}" y2="{height - 24}" stroke="{raw_color}" stroke-width="1.5" stroke-dasharray="5 5"/>
+  <text x="{left + 150}" y="{height - 20}" class="chart-dim">top{n} (unhedged)</text>
   <text x="{left}" y="{height - 10}" class="chart-dim">{html.escape(dates)}</text>
   <text x="{width - right}" y="{height - 10}" text-anchor="end" class="chart-dim">{len(rows)} benchmark days</text>
 </svg>"""
@@ -1562,7 +1553,7 @@ HTML_INDEX_TMPL = """<!doctype html>
 {day_nav}
 
 <section class="alpha-brief">
-  <div class="label">ALPHA CHECK · cumulative top20 excess</div>
+  <div class="label">ALPHA CHECK · cumulative top20 vs QQQ</div>
   {alpha_chart}
   <div class="more">{alpha_teaser} → <a href="alpha.html">full benchmark</a></div>
 </section>
@@ -2001,8 +1992,7 @@ def render_alpha_teaser(alpha: dict) -> str:
     s = alpha["summary"]
     return (
         f"top{alpha['top_n']} {fmt_pct(s['top_avg']).strip()} avg · "
-        f"all-mentioned {fmt_pct(s['all_avg']).strip()} · "
-        f"excess {fmt_pct(s['excess_avg']).strip()} over {s['n_days']} days"
+        f"vs QQQ {fmt_pct(s['vs_qqq_avg']).strip()} over {s['n_days']} days"
     )
 
 
@@ -2072,11 +2062,13 @@ def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
 def render_alpha_page(alpha: dict) -> str:
     definition = (
         "signal date = clean panel run timestamp converted to ET calendar date\n"
-        "basket = top 20 tickers by daily net score (bullish mentions - bearish mentions)\n"
-        "baseline = every valid mentioned ticker that day, equal-weighted\n"
+        "basket = top 20 tickers by daily net score (bullish mentions - bearish mentions),\n"
+        "         equal-weighted (unhedged)\n"
         "entry = next market session open\n"
         "exit = same market session close\n"
-        "excess = top20 return - all-mentioned return\n\n"
+        "top20 = aggregate next-session return of the basket\n"
+        "vs QQQ = top20 return - QQQ return (the highlighted benchmark)\n"
+        "weekend/holiday runs that share a session are collapsed to the last signal\n\n"
         "this is a paper benchmark, not a tradable recommendation. it is meant "
         "to answer whether pythia's own ranking contains incremental signal "
         "before adding sector, factor, liquidity, or prompt-seed controls."
