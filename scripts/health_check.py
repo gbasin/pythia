@@ -102,6 +102,36 @@ def mentions_per_response(con, run_id: int) -> tuple[float, int, int]:
     return rate, n_mentions, n_review
 
 
+def _table_exists(con, name: str) -> bool:
+    return con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone() is not None
+
+
+def alpha_lag_sessions(con) -> tuple[int, str | None, str | None]:
+    """How many priced SPY sessions sit beyond the latest benchmarked entry_date.
+
+    Returns (lag, latest_forward_entry, latest_priced_session). lag counts
+    distinct SPY trading sessions newer than the most recent forward_returns
+    entry — i.e. sessions we have prices for but haven't scored.
+    """
+    if not (_table_exists(con, "forward_returns") and _table_exists(con, "prices")):
+        return 0, None, None
+    fwd = con.execute(
+        "SELECT MAX(entry_date) AS d FROM forward_returns WHERE horizon_days=1"
+    ).fetchone()["d"]
+    sessions = [
+        r["date"]
+        for r in con.execute(
+            "SELECT DISTINCT date FROM prices "
+            "WHERE ticker='SPY' AND source='yfinance' AND date > COALESCE(?, '0000-00-00') "
+            "ORDER BY date",
+            (fwd,),
+        ).fetchall()
+    ]
+    return len(sessions), fwd, (sessions[-1] if sessions else None)
+
+
 def baseline_mentions_rate(con, exclude_run_id: int, days: int) -> float:
     """Median mentions-per-ok-response across the prior `days` clean runs."""
     runs = [
@@ -190,6 +220,34 @@ def run_checks(con, cfg: dict) -> list[Finding]:
                 f"being honored, or extraction regressed."))
     else:
         _, n_mentions, n_review = mentions_per_response(con, rid)
+
+    # Alpha benchmark lag — two signals, fire on either.
+    if "alpha_lag" in checks:
+        c = checks["alpha_lag"]
+        sev = c.get("severity", "warn")
+        lag, fwd, latest = alpha_lag_sessions(con)
+        # (1) priced sessions beyond the latest scored entry (SPY fresh, scoring stuck).
+        if lag > c.get("max_sessions", 1):
+            findings.append(Finding(
+                "alpha_lag", sev,
+                f"alpha benchmark lagging {lag} sessions (through {fwd})",
+                f"{lag} priced SPY sessions exist beyond the latest benchmarked "
+                f"entry_date {fwd} (newest priced: {latest}). Forward returns "
+                f"aren't being computed for sessions we already have prices for "
+                f"— the price cache or benchmark_alpha is stuck."))
+        # (2) calendar staleness — catches a total stall where SPY is frozen too.
+        elif fwd:
+            entry = datetime.fromisoformat(fwd).replace(tzinfo=timezone.utc)
+            age_days = (datetime.now(timezone.utc) - entry).total_seconds() / 86400
+            if age_days > c.get("max_age_days", 5):
+                findings.append(Finding(
+                    "alpha_stale", sev,
+                    f"alpha benchmark stale: newest scored session {fwd} "
+                    f"is {age_days:.0f}d old",
+                    f"The latest forward-return entry_date is {fwd} "
+                    f"({age_days:.1f} calendar days ago, threshold "
+                    f"{c.get('max_age_days', 5)}d). The price fetch may be down "
+                    f"(yfinance) or benchmark_alpha is not running."))
 
     # Classifier needs_review rate.
     if "classifier_needs_review" in checks and n_mentions:

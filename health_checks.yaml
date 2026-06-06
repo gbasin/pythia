@@ -35,6 +35,19 @@ checks:
     severity: warn
     max_ratio: 0.05
 
+  # Alpha benchmark falling behind. Two independent signals, fires on either:
+  #   max_sessions  - priced SPY sessions that exist but haven't been scored
+  #                   into forward returns (catches a downstream stall while the
+  #                   price fetch still works). 1 is normal; 2+ is stuck.
+  #   max_age_days  - calendar days between today and the newest scored session
+  #                   (catches a TOTAL stall — yfinance down, benchmark crash —
+  #                   where SPY itself is also frozen so max_sessions reads 0).
+  #                   Tolerant of long weekends/holidays.
+  alpha_lag:
+    severity: warn
+    max_sessions: 1
+    max_age_days: 5
+
 transports:
   ntfy:
     enabled: true

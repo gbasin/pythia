@@ -35,6 +35,13 @@ MARKET_TZ = ZoneInfo("America/New_York")
 BENCHMARK_TICKERS = ("SPY", "QQQ")
 YFINANCE_SKIP = {"SPX", "NDX", "RUT", "DJI", "DJX", "VIX", "COMP", "DXY", "IXIC"}
 
+# SPY/QQQ double as the trading-day calendar anchor (next_trade_date keys off
+# SPY). We re-pull a short trailing window for them every run so we always
+# learn the latest real session (and absorb yfinance restatements). Cheap —
+# two symbols.
+REFERENCE_TICKERS = ("SPY", "QQQ")
+REFERENCE_REFRESH_DAYS = 7
+
 
 @dataclass(frozen=True)
 class DayResult:
@@ -239,54 +246,133 @@ def fetch_price_history(tickers: list[str], start: date, end: date) -> pd.DataFr
     return out
 
 
-def cache_prices(con: sqlite3.Connection, tickers: list[str], start: date, end: date) -> None:
-    tickers = [t for t in tickers if t not in YFINANCE_SKIP]
-    stale_tickers: list[str] = []
-    stale_start = start
-    for ticker in tickers:
-        row = con.execute(
-            "SELECT MAX(date) AS max_date FROM prices WHERE ticker = ? AND source = 'yfinance'",
-            (ticker,),
-        ).fetchone()
-        if not row or not row["max_date"]:
-            stale_tickers.append(ticker)
+def _write_bars(con: sqlite3.Connection, hist: pd.DataFrame) -> int:
+    """Insert/replace price bars from a fetched frame. Returns rows written.
+    Bars with a null open or close are skipped (yfinance occasionally returns
+    placeholder rows for not-yet-settled sessions)."""
+    if hist is None or hist.empty:
+        return 0
+    written = 0
+    for _, row in hist.iterrows():
+        ticker = str(row["Ticker"]).upper()
+        open_px = value_or_none(row.get("Open"))
+        close_px = value_or_none(row.get("Close"))
+        if open_px is None or close_px is None:
             continue
-        max_date = date.fromisoformat(row["max_date"])
-        if max_date < end - timedelta(days=3):
-            stale_tickers.append(ticker)
-            stale_start = min(stale_start, max_date + timedelta(days=1))
+        con.execute(
+            """
+            INSERT OR REPLACE INTO prices
+              (ticker, date, open, close, adj_close, volume, source)
+            VALUES (?, ?, ?, ?, ?, ?, 'yfinance')
+            """,
+            (
+                ticker,
+                row["date"],
+                open_px,
+                close_px,
+                value_or_none(row.get("Adj Close")),
+                int(v) if (v := value_or_none(row.get("Volume"))) is not None else None,
+            ),
+        )
+        written += 1
+    return written
 
-    if not stale_tickers:
+
+def _max_cached_date(con: sqlite3.Connection, ticker: str) -> date | None:
+    row = con.execute(
+        "SELECT MAX(date) AS d FROM prices WHERE ticker = ? AND source = 'yfinance'",
+        (ticker,),
+    ).fetchone()
+    return date.fromisoformat(row["d"]) if row and row["d"] else None
+
+
+def cache_prices(con: sqlite3.Connection, tickers: list[str], start: date, end: date) -> None:
+    """Bring the price cache current.
+
+    Strategy (replaces the old "only refetch if 3+ days stale" gate, which left
+    the most recent 1-2 sessions perpetually missing for the bulk of the
+    universe and made forward returns lag ~3 days):
+
+      1. Always re-pull a short trailing window for the SPY/QQQ anchors so we
+         learn the latest real trading session.
+      2. Refetch any universe ticker not caught up to that session, from its own
+         last cached bar forward — normally 1-2 bars, only for behind tickers.
+
+    Logs coverage/absence so a thin pull is debuggable from the log alone.
+    """
+    tickers = [t for t in tickers if t not in YFINANCE_SKIP]
+    universe = [t for t in tickers if t not in REFERENCE_TICKERS]
+
+    # 1. Refresh calendar anchors over a trailing window.
+    anchors = [t for t in tickers if t in REFERENCE_TICKERS]
+    if anchors:
+        anchor_start = max(start, end - timedelta(days=REFERENCE_REFRESH_DAYS))
+        hist = fetch_price_history(anchors, anchor_start, end)
+        n = _write_bars(con, hist)
+        con.commit()
+        dates = sorted(set(hist["date"].astype(str))) if not hist.empty else []
+        span = f"{dates[0]}..{dates[-1]}" if dates else "none"
+        print(f"[benchmark] anchors {anchors} {anchor_start}->{end}: "
+              f"wrote {n} bars, sessions {span}")
+
+    latest_session = _max_cached_date(con, "SPY")
+
+    # 2. Refetch universe tickers behind the latest session (or never cached).
+    stale: list[str] = []
+    stale_start = end
+    n_new = 0
+    for ticker in universe:
+        md = _max_cached_date(con, ticker)
+        if md is None:
+            stale.append(ticker)
+            stale_start = min(stale_start, start)
+            n_new += 1
+        elif latest_session and md < latest_session:
+            stale.append(ticker)
+            stale_start = min(stale_start, md + timedelta(days=1))
+
+    if not stale:
+        print(f"[benchmark] universe current through {latest_session} "
+              f"({len(universe)} tickers)")
         return
 
-    print(f"[benchmark] fetching prices for {len(stale_tickers)} ticker(s)")
-    for i in range(0, len(stale_tickers), 100):
-        batch = stale_tickers[i : i + 100]
+    print(f"[benchmark] fetching {len(stale)} universe ticker(s) "
+          f"({n_new} new) {stale_start}->{end}, target session {latest_session}")
+    total = 0
+    for i in range(0, len(stale), 100):
+        batch = stale[i : i + 100]
         hist = fetch_price_history(batch, stale_start, end)
-        for _, row in hist.iterrows():
-            ticker = str(row["Ticker"]).upper()
-            open_px = value_or_none(row.get("Open"))
-            close_px = value_or_none(row.get("Close"))
-            adj_close = value_or_none(row.get("Adj Close"))
-            volume = value_or_none(row.get("Volume"))
-            if open_px is None or close_px is None:
-                continue
-            con.execute(
-                """
-                INSERT OR REPLACE INTO prices
-                  (ticker, date, open, close, adj_close, volume, source)
-                VALUES (?, ?, ?, ?, ?, ?, 'yfinance')
-                """,
-                (
-                    ticker,
-                    row["date"],
-                    open_px,
-                    close_px,
-                    adj_close,
-                    int(volume) if volume is not None else None,
-                ),
-            )
+        total += _write_bars(con, hist)
         con.commit()
+        returned = (
+            {str(t).upper() for t in hist["Ticker"].unique()}
+            if not hist.empty and "Ticker" in hist
+            else set()
+        )
+        absent = [t for t in batch if t.upper() not in returned]
+        if absent:
+            shown = ", ".join(absent[:12]) + (" …" if len(absent) > 12 else "")
+            print(f"[benchmark]   batch {i // 100}: {len(absent)} absent from "
+                  f"yfinance: {shown}")
+    print(f"[benchmark] wrote {total} universe bars")
+
+    # 3. Coverage report for the target session — the key debugging signal.
+    if latest_session:
+        present = {
+            r["ticker"]
+            for r in con.execute(
+                "SELECT DISTINCT ticker FROM prices "
+                "WHERE date = ? AND source = 'yfinance'",
+                (latest_session.isoformat(),),
+            ).fetchall()
+        }
+        missing = [t for t in universe if t not in present]
+        line = (f"[benchmark] session {latest_session}: "
+                f"{len(universe) - len(missing)}/{len(universe)} universe covered")
+        if missing:
+            shown = ", ".join(missing[:12]) + (" …" if len(missing) > 12 else "")
+            line += f"; still missing {len(missing)}: {shown}"
+        print(line)
 
 
 def value_or_none(value) -> float | None:
@@ -334,12 +420,38 @@ def day_return(con: sqlite3.Connection, ticker: str, trade_date: str) -> float |
     return (float(row["close"]) / float(row["open"])) - 1.0
 
 
+def effective_signal_dates(con: sqlite3.Connection) -> set[str]:
+    """Collapse signal-days that share a next trading session down to one.
+
+    The panel runs 7 days/week, so a Friday, Saturday and Sunday run all map to
+    Monday's open->close — and a pre-holiday weekend can fold three or four
+    signal-days onto one session. Counting each as its own sample would weight
+    that single session 3-4x in both the average and the cumulative. We keep
+    only the LAST signal_date before each session (the freshest "going into the
+    open" view). Trading-day signals are unaffected (1:1 with their session).
+    """
+    by_session: dict[str, str] = {}
+    for r in con.execute(
+        "SELECT DISTINCT signal_date FROM daily_signals ORDER BY signal_date"
+    ).fetchall():
+        sd = r["signal_date"]
+        td = next_trade_date(con, sd)
+        if not td:
+            continue
+        if td not in by_session or sd > by_session[td]:
+            by_session[td] = sd
+    return set(by_session.values())
+
+
 def compute_forward_returns(con: sqlite3.Connection) -> None:
     con.execute("DELETE FROM forward_returns WHERE horizon_days = 1")
+    effective = effective_signal_dates(con)
     rows = con.execute(
         "SELECT DISTINCT signal_date, ticker FROM daily_signals ORDER BY signal_date, ticker"
     ).fetchall()
     for row in rows:
+        if row["signal_date"] not in effective:
+            continue
         trade_date = next_trade_date(con, row["signal_date"])
         if not trade_date:
             continue
@@ -383,11 +495,13 @@ def basket_average(returns: list[float]) -> float | None:
 
 def benchmark_results(con: sqlite3.Connection, top_n: int) -> list[DayResult]:
     results: list[DayResult] = []
+    effective = effective_signal_dates(con)
     days = [
         r["signal_date"]
         for r in con.execute(
             "SELECT DISTINCT signal_date FROM daily_signals ORDER BY signal_date"
         ).fetchall()
+        if r["signal_date"] in effective
     ]
     for day in days:
         trade_date = next_trade_date(con, day)
