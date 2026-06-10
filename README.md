@@ -91,12 +91,33 @@ logs/panel-YYYYMMDD.log            # per-run logs (gitignored)
 ## schedule
 
 a launchd agent fires `scripts/daily_run.sh` nightly at **8 PM ET**
-(machine local time; assumes ET).
+(machine local time; assumes ET). Install the plist into the user's
+LaunchAgents directory; bootstrapping the copy in `launchd/` directly is only
+for the current launchd session and can disappear after reboot/login changes.
+
+first install:
 
 ```bash
-launchctl bootstrap gui/$UID launchd/com.pythia.daily.plist   # load
-launchctl bootout    gui/$UID/com.pythia.daily                # unload
-launchctl print      gui/$UID/com.pythia.daily                # inspect
+mkdir -p ~/Library/LaunchAgents
+cp launchd/com.pythia.daily.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.pythia.daily.plist
+launchctl print gui/$UID/com.pythia.daily
+```
+
+after editing `launchd/com.pythia.daily.plist`, reinstall and reload:
+
+```bash
+launchctl bootout gui/$UID/com.pythia.daily 2>/dev/null || true
+cp launchd/com.pythia.daily.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.pythia.daily.plist
+launchctl print gui/$UID/com.pythia.daily
+```
+
+remove the schedule:
+
+```bash
+launchctl bootout gui/$UID/com.pythia.daily
+rm ~/Library/LaunchAgents/com.pythia.daily.plist
 ```
 
 ## dashboard
