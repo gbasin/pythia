@@ -1383,6 +1383,8 @@ h3 { margin-top: calc(var(--lh) * 1.5); font-size: 14px; line-height: var(--lh);
 }
 .dim, .intro, .source, .meta-line, .caption, .chart-dim { color: var(--dim); }
 .masthead { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 4ch; padding-bottom: var(--lh); border-bottom: 1px solid var(--faint); }
+.wordmark-link { color: var(--ink); }
+.wordmark-link:hover { color: var(--accent); text-decoration: none; }
 .dek { margin-top: var(--lh); max-width: 72ch; color: var(--dim); }
 .stamp { text-align: right; color: var(--dim); }
 .stamp strong { color: var(--accent); font-weight: 700; }
@@ -1558,8 +1560,10 @@ def stamp_block(d: dict, panel_no: int) -> str:
     )
 
 
-def render_masthead(d: dict, panel_no: int, page_name: str | None = None, compact: bool = False) -> str:
-    title = "PYTHIA" if not page_name else f"PYTHIA / {page_name}"
+def render_masthead(d: dict, panel_no: int, page_name: str | None = None, compact: bool = False,
+                    root_prefix: str = "") -> str:
+    home = f'<a class="wordmark-link" href="{html.escape(root_prefix)}index.html">PYTHIA</a>'
+    title = home if not page_name else f"{home} / {html.escape(page_name)}"
     dek = (
         "Every night we ask Claude, GPT-5.5 and Gemini what stocks to buy.<br>"
         "We log every answer."
@@ -1567,7 +1571,7 @@ def render_masthead(d: dict, panel_no: int, page_name: str | None = None, compac
     dek_html = "" if compact else f'<div class="dek">{dek}</div>'
     return (
         '<header class="masthead">'
-        f'<div><div class="wordmark">{html.escape(title)}</div>{dek_html}</div>'
+        f'<div><div class="wordmark">{title}</div>{dek_html}</div>'
         f'{stamp_block(d, panel_no)}'
         '</header>'
     )
@@ -1884,7 +1888,7 @@ def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
     return page_shell(
         title=f"pythia: {day}",
         page="day",
-        masthead=render_masthead(d, len(days), page_name=day, compact=True),
+        masthead=render_masthead(d, len(days), page_name=day, compact=True, root_prefix=root_prefix),
         nav=render_main_nav(root_prefix),
         day_nav=render_day_nav(day, days, is_index),
         content=content,
