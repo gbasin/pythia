@@ -184,11 +184,11 @@ was usually a lead pick."""
 
 INTRO_PERSONA_DELTA = """\
 we ask the same questions as two different investors: a 28-year-old
-speculator and a family-office allocator. the counts are bullish
-mentions only: how often each audience was told to buy the name.
-lean shows which audience a name is pitched to, and how lopsidedly:
-100% speculator means every bullish mention went to the speculator.
-treat lean on thinly mentioned names with caution."""
+speculator and a family-office allocator. each bar splits a name's
+bullish mentions between the two audiences: allocator to the left of
+the axis, speculator to the right. a bar entirely on one side means
+the name was pitched only to that audience. treat thin bars with
+caution."""
 
 
 INTRO_SAMPLES = """\
@@ -1022,42 +1022,47 @@ def render_top_mentions(d: dict) -> str:
     return "".join(out)
 
 
-def persona_lean(spec: int, alloc: int) -> str:
-    """Unsigned plain-words tilt: '100% speculator', '73% allocator', 'even'.
-    Audience routing has no good/bad valence, so no up/down colors here."""
-    total = spec + alloc
-    if not total:
-        return '<span class="zero">n/a</span>'
-    if spec == alloc:
-        return '<span class="dim">even</span>'
-    if spec > alloc:
-        return f"{round(100 * spec / total)}% speculator"
-    return f"{round(100 * alloc / total)}% allocator"
+def persona_split_cells(spec: int, alloc: int, max_count: int, half: int) -> str:
+    """Two cells of a diverging bar: allocator grows left from the center
+    axis, speculator grows right. Counts sit at the outer bar ends. The
+    axis itself is the border between the cells."""
+    def seg(count: int) -> str:
+        width = round(half * count / max_count) if max_count else 0
+        return "█" * width
+
+    a_count = f'<span class="{"zero" if alloc == 0 else ""}">{alloc}</span>'
+    s_count = f'<span class="{"zero" if spec == 0 else ""}">{spec}</span>'
+    a_bar = f'<span class="split-bar">{seg(alloc)}</span>' if alloc else ""
+    s_bar = f'<span class="split-bar">{seg(spec)}</span>' if spec else ""
+    return (
+        f'<td class="side-a">{a_count} {a_bar}</td>'
+        f'<td class="side-s">{s_bar} {s_count}</td>'
+    )
 
 
-def render_persona_delta(d: dict) -> str:
-    rows = d["persona_delta"]
+def render_persona_split(rows: list, half: int, limit: int) -> str:
+    rows = [(r["ticker"], r["spec_n"] or 0, r["alloc_n"] or 0) for r in rows[:limit]]
     if not rows:
         return '<p class="dim">no persona split was recorded for this night.</p>'
+    max_count = max((max(s, a) for _, s, a in rows), default=1) or 1
     out = [
-        '<div class="scroll"><table class="data-table">',
-        "<thead><tr><th>ticker</th><th class=\"num\">speculator</th>"
-        "<th class=\"num\">allocator</th><th>lean</th>"
-        "</tr></thead><tbody>",
+        '<div class="scroll"><table class="data-table split-table">',
+        '<thead><tr><th>ticker</th><th class="side-a">◂ allocator</th>'
+        '<th class="side-s">speculator ▸</th></tr></thead><tbody>',
     ]
-    for r in rows[:20]:
-        spec = r["spec_n"] or 0
-        alloc = r["alloc_n"] or 0
+    for ticker, spec, alloc in rows:
         out.append(
             "<tr>"
-            f'<td>${html.escape(r["ticker"])}</td>'
-            f'<td class="num">{spec}</td>'
-            f'<td class="num">{alloc}</td>'
-            f'<td>{persona_lean(spec, alloc)}</td>'
+            f'<td>${html.escape(ticker)}</td>'
+            f'{persona_split_cells(spec, alloc, max_count, half)}'
             "</tr>"
         )
     out.append("</tbody></table></div>")
     return "".join(out)
+
+
+def render_persona_delta(d: dict) -> str:
+    return render_persona_split(d["persona_delta"], half=16, limit=20)
 
 
 def render_samples(d: dict) -> str:
@@ -1391,6 +1396,11 @@ h3 { margin-top: calc(var(--lh) * 1.5); font-size: 14px; line-height: var(--lh);
 .wordmark-link { color: var(--ink); }
 .wordmark-link:hover { color: var(--accent); text-decoration: none; }
 .nb { white-space: nowrap; }
+.split-table .side-a { text-align: right; padding-right: 2px; }
+.split-table .side-s { padding-left: 2px; border-left: 1px solid var(--dim); }
+.split-table th.side-a { padding-right: 1ch; }
+.split-table th.side-s { padding-left: 1ch; }
+.split-table .split-bar { color: var(--dim); }
 .dek { margin-top: var(--lh); max-width: 72ch; color: var(--dim); }
 .stamp { text-align: right; color: var(--dim); }
 .stamp strong { color: var(--accent); font-weight: 700; }
@@ -1814,29 +1824,17 @@ def render_persona_teaser(d: dict, day: str) -> str:
     for r in d["persona_delta"]:
         spec = r["spec_n"] or 0
         alloc = r["alloc_n"] or 0
-        total = spec + alloc
-        if total >= 4:
-            rows.append((r["ticker"], spec, alloc))
-    rows.sort(key=lambda r: (-abs(r[1] / (r[1] + r[2]) - 0.5), -(r[1] + r[2])))
+        if spec + alloc >= 4:
+            rows.append({"ticker": r["ticker"], "spec_n": spec, "alloc_n": alloc})
+    # five most lopsided names, displayed as a gradient from
+    # speculator-heavy down to allocator-heavy
+    rows.sort(key=lambda r: (-abs(r["spec_n"] / (r["spec_n"] + r["alloc_n"]) - 0.5),
+                             -(r["spec_n"] + r["alloc_n"])))
     rows = rows[:5]
+    rows.sort(key=lambda r: -(r["spec_n"] - r["alloc_n"]))
     if not rows:
         return '<p class="dim">no persona split recorded for this night yet.</p>'
-    out = [
-        '<div class="scroll"><table class="data-table">',
-        "<thead><tr><th>ticker</th><th class=\"num\">spec</th>"
-        "<th class=\"num\">alloc</th><th>lean</th></tr></thead><tbody>",
-    ]
-    for ticker, spec, alloc in rows:
-        out.append(
-            "<tr>"
-            f'<td>${html.escape(ticker)}</td>'
-            f'<td class="num">{spec}</td>'
-            f'<td class="num">{alloc}</td>'
-            f'<td>{persona_lean(spec, alloc)}</td>'
-            "</tr>"
-        )
-    out.append("</tbody></table></div>")
-    return "".join(out)
+    return render_persona_split(rows, half=8, limit=5)
 
 
 def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[str],
@@ -1890,7 +1888,7 @@ def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[s
 <details>
   <summary>terms</summary>
   <div class="details-body">
-    <p>net means bullish mentions minus bearish mentions. flow is the ranked push models gave tickers on the night shown. first sighting means the first night a ticker appeared in the logged panel. consensus means more than one provider pushed the same ticker bullish. lean is the share of a ticker's bullish mentions that went to its dominant audience, speculator or allocator.</p>
+    <p>net means bullish mentions minus bearish mentions. flow is the ranked push models gave tickers on the night shown. first sighting means the first night a ticker appeared in the logged panel. consensus means more than one provider pushed the same ticker bullish. the who's asking bars split a ticker's bullish mentions between the allocator (left of the axis) and the speculator (right).</p>
   </div>
 </details>
 """
