@@ -1800,6 +1800,7 @@ td.side-s, th.side-s { border-left: 2px solid var(--axis-split); }
 .score-side { display: flex; flex-direction: column; gap: 8px; }
 .stat-frame { border: 1px solid var(--frame); border-radius: 2px; background: var(--base); padding: 10px 12px; }
 .stat-num { font-size: 21px; font-weight: 700; }
+.stat-split { margin-top: 3px; font-size: 12px; font-weight: 600; color: var(--dim); }
 .stat-rest { margin-top: 6px; font-size: 11.5px; color: var(--dim); line-height: 1.45; }
 .source { font-size: 10.5px; color: var(--zero); margin-top: 6px; }
 .qbutton {
@@ -2265,10 +2266,14 @@ def render_scoreboard_stat(alpha: dict) -> str:
         return '<p class="stat-rest">scoreboard waiting for price data.</p>'
     s = alpha["summary"]
     excess = s["cum_top_vs_qqq"]
+    cum_top = s["cum_top"]
+    cum_qqq = cum_top - excess
     cls = "up" if excess >= 0 else "down"
     caveat = "; not yet statistically significant" if s["n_days"] < 60 else ""
     return (
         f'<div class="stat-num {cls}">{html.escape(fmt_signed_pct(excess))} vs QQQ</div>'
+        f'<div class="stat-split">top-{alpha["top_n"]} {signed_pct_span(cum_top)}'
+        f' · QQQ {signed_pct_span(cum_qqq)}</div>'
         f'<p class="stat-rest">cumulative excess of the nightly top-{alpha["top_n"]} '
         f"basket over QQQ across {s['n_days']} sessions, next open to close"
         f"{caveat}.</p>"
