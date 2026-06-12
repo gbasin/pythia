@@ -32,9 +32,10 @@ PROMPTS_YAML_PATH = ROOT / "prompts.yaml"
 ASSETS_DIR = ROOT / "assets"
 OUT_DIR = Path(os.environ.get("PYTHIA_DIST_DIR", ROOT / "dist"))
 OUT_PATH = OUT_DIR / "index.html"
-OUT_PROMPTS_PATH = OUT_DIR / "prompts.html"
+OUT_METHODOLOGY_PATH = OUT_DIR / "methodology.html"
 OUT_TRENDS_PATH = OUT_DIR / "trends.html"
 OUT_ALPHA_PATH = OUT_DIR / "alpha.html"
+MODEL_CONFIGS_YAML_PATH = ROOT / "model_configs.yaml"
 ET = ZoneInfo("America/New_York")
 
 # Mirrors TOOLS_OFF_SUFFIX in scripts/run_panel.py — duplicated so the
@@ -71,6 +72,37 @@ def load_preamble() -> str:
                 out.append("")
         return "\n".join(out).strip()
     return ""
+
+
+def load_model_configs_from_yaml() -> list[dict[str, str]]:
+    """Small purpose-built parser for this repo's simple model_configs.yaml."""
+    try:
+        lines = MODEL_CONFIGS_YAML_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    rows: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    in_configs = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "model_configs:":
+            in_configs = True
+            continue
+        if not in_configs:
+            continue
+        if line.startswith("  - "):
+            if current:
+                rows.append(current)
+            current = {}
+            stripped = stripped[2:].strip()
+        if current is None or ":" not in stripped or stripped.startswith("#"):
+            continue
+        key, value = stripped.split(":", 1)
+        if key in {"id", "provider", "cli_command", "subcommand", "model_name", "trace_format"}:
+            current[key] = value.strip().strip('"').strip("'")
+    if current:
+        rows.append(current)
+    return rows
 
 
 def assemble_example(persona_desc: str, prompt_text: str, preamble: str, tools_state: str) -> str:
@@ -142,72 +174,27 @@ why bother?
   beyond that. the page rebuilds from the database on every run."""
 
 
-INTRO_FINDINGS = """\
-this day: {n_runs} run(s) · {n_responses} successful responses ·
-{n_unique} unique tickers. use the day nav above to page back
-through earlier days."""
-
-
 INTRO_TOP_MENTIONS = """\
-every $TICKER the model mentions is classified by a separate
-smaller LLM (claude-haiku-4-5) as one of four stances:
-
-  bullish  — recommended to buy / own / overweight
-  bearish  — recommended to avoid / sell / underweight
-  neutral  — mentioned without a clear recommendation
-  context  — mentioned only as a benchmark or comparison
-
-the headline column is  net = bullish - bearish. it's sorted by
-net descending — most-pushed names at the top, most-pushed-against
-at the bottom. the signed bar runs from bearish (left of the │
-divider) to bullish (right). n is the total raw mention count;
-avg_pos is the average position in the response (1 = lead pick).
-
-tickers seeded by the prompt itself (e.g. NVDA in "is NVDA a buy?")
-will get more mentions by design — those prompts mirror real
-retail questions, and the volume of recommendation retail receives
-on those names is the signal we're capturing."""
+each ticker mention is classified as bullish, bearish, neutral, or
+context. net is bullish minus bearish. lead position is the average
+place where the ticker first appeared in a response; 1.0 means it
+was usually a lead pick."""
 
 
 INTRO_PERSONA_DELTA = """\
-the same 10 questions get asked twice per model: once as an
-aggressive 28-year-old speculator hunting the next 10×, once as
-the CIO of a $500M family office with a real return mandate.
-
-delta = (speculator count) − (allocator count). positive = the
-model pitches this name more aggressively to retail. negative
-= it sleeves this name for institutions."""
+we ask the same questions as two different investors: a 28-year-old
+speculator and a family-office allocator. delta shows which names the
+models route toward one audience more than the other."""
 
 
 INTRO_SAMPLES = """\
-below are the most recent successful responses — exactly as the
-models wrote them, capped at the first ~620 chars. the complete
-text and the full tool-call trace (every web search, every
-reasoning step) is preserved in the local database for replay."""
+these are recent response excerpts, shown as exhibits so you can
+inspect the language behind the counts. full responses and traces are
+preserved in the local data."""
 
 
-INTRO_PROMPTS = """\
-each question is asked verbatim. before every question we attach
-one of the two personas ("about me: ...") and a global preamble
-that instructs the model to ground its answer in current market
-state and to prefix every ticker with $ so extraction is
-deterministic. compliance with the $ rule has been ~100% so far."""
 
 
-INTRO_PERSONAS = """\
-these descriptions are injected as "about me" context before
-each question. the speculator and allocator bracket the spectrum
-of who is plausibly asking an AI for investment advice — together
-they let us measure how much the same model changes its tune
-based on who it thinks is listening."""
-
-
-INTRO_MODELS = """\
-each model is invoked through its production agent harness —
-claude code for claude, codex CLI for gpt, google-genai SDK with
-Google Search grounding for gemini — with web/search tools available
-by default. consumer chat surfaces (chatgpt.com, claude.ai,
-gemini.google.com) are deferred to a later version."""
 
 
 FOOTER = """\
@@ -447,14 +434,14 @@ def fetch(con, day: str | None = None) -> dict:
     # Latest clean run for the freshness stamp (per-day or global).
     if day:
         latest_run = con.execute(
-            "SELECT id, started_at, finished_at, status, panel_version "
+            "SELECT id, started_at, finished_at, status "
             "FROM runs WHERE is_clean=1 AND DATE(started_at)=? "
             "ORDER BY id DESC LIMIT 1",
             (day,),
         ).fetchone()
     else:
         latest_run = con.execute(
-            "SELECT id, started_at, finished_at, status, panel_version "
+            "SELECT id, started_at, finished_at, status "
             "FROM runs WHERE is_clean=1 ORDER BY id DESC LIMIT 1"
         ).fetchone()
 
@@ -606,7 +593,7 @@ def fetch(con, day: str | None = None) -> dict:
 
 def humanize_age(iso: str | None) -> str:
     if not iso:
-        return "—"
+        return "-"
     try:
         ts = datetime.fromisoformat(iso.replace("Z", "+00:00"))
     except ValueError:
@@ -627,17 +614,6 @@ def bar(value: int, max_value: int, width: int = 24) -> str:
         return ""
     n = round(width * value / max_value)
     return "█" * n + "░" * (width - n)
-
-
-def signed_bar(net: int, max_abs: int, half_width: int = 10) -> str:
-    """Two-sided bar around a │ divider. Bearish fills left, bullish fills right."""
-    if max_abs <= 0:
-        return " " * half_width + "│" + " " * half_width
-    pos = round(half_width * net / max_abs) if net > 0 else 0
-    neg = round(half_width * (-net) / max_abs) if net < 0 else 0
-    left = " " * (half_width - neg) + "█" * neg
-    right = "█" * pos + " " * (half_width - pos)
-    return left + "│" + right
 
 
 SPARK_CHARS = "▁▂▃▄▅▆▇█"
@@ -808,6 +784,24 @@ def fmt_signed_pct(value: float | None) -> str:
     return f"{value * 100:+.2f}%"
 
 
+def signed_class(value: float | int | None) -> str:
+    if value is None or value == 0:
+        return "zero"
+    return "up" if value > 0 else "down"
+
+
+def signed_int_span(value: int | None) -> str:
+    if value is None:
+        return '<span class="zero">n/a</span>'
+    return f'<span class="{signed_class(value)}">{value:+d}</span>'
+
+
+def signed_pct_span(value: float | None) -> str:
+    if value is None:
+        return '<span class="zero">n/a</span>'
+    return f'<span class="{signed_class(value)}">{html.escape(fmt_signed_pct(value))}</span>'
+
+
 def ordinal(n: int) -> str:
     if 10 <= n % 100 <= 20:
         suffix = "th"
@@ -818,37 +812,53 @@ def ordinal(n: int) -> str:
 
 def render_alpha_summary(alpha: dict) -> str:
     if not alpha.get("available"):
-        return "  alpha benchmark not built yet. run: uv run scripts/benchmark_alpha.py --rebuild-signals"
+        return '<p class="dim">no scoreboard data yet; the first benchmark session lands after the next market open.</p>'
     s = alpha["summary"]
-    return (
-        f"  days                 {s['n_days']:>6}\n"
-        f"  top{alpha['top_n']:<2} avg            {fmt_pct(s['top_avg'])}\n"
-        f"  QQQ avg              {fmt_pct(s['qqq_avg'])}\n"
-        f"  vs QQQ avg           {fmt_pct(s['vs_qqq_avg'])}\n"
-        f"  cumulative top{alpha['top_n']:<2}    {fmt_pct(s['cum_top'])}\n"
-        f"  cumulative vs QQQ    {fmt_pct(s['cum_top_vs_qqq'])}\n"
-        f"  latest trade date    {s['latest_trade_date']}"
-    )
+    n = alpha.get("top_n", 20)
+    rows = [
+        ("sessions", f"{s['n_days']}"),
+        (f"top-{n} avg", signed_pct_span(s["top_avg"])),
+        ("QQQ avg", signed_pct_span(s["qqq_avg"])),
+        ("vs QQQ avg", signed_pct_span(s["vs_qqq_avg"])),
+        (f"cumulative top-{n}", signed_pct_span(s["cum_top"])),
+        ("cumulative excess vs QQQ", signed_pct_span(s["cum_top_vs_qqq"])),
+        ("latest trade date", html.escape(s["latest_trade_date"] or "pending")),
+    ]
+    out = ['<table class="data-table"><thead><tr><th>measure</th><th class="num">value</th></tr></thead><tbody>']
+    for label, value in rows:
+        out.append(f'<tr><td>{html.escape(label)}</td><td class="num">{value}</td></tr>')
+    out.append("</tbody></table>")
+    return "".join(out)
 
 
 def render_alpha_table(alpha: dict) -> str:
     rows = alpha.get("rows") or []
     if not rows:
-        return "  (no benchmarkable rows yet)"
+        return '<p class="dim">no benchmarkable rows yet; the first scored session appears after prices settle.</p>'
     n = alpha.get("top_n", 20)
-    lines = [
-        f"  signal_date  trade_date   top_avail  top{n}_1d  QQQ      vs_QQQ   cum_top{n}  cum_vs_QQQ",
-        "  ----------   ----------   ---------  -------  ------   ------   --------  ----------",
+    out = [
+        '<table class="data-table alpha-table">',
+        "<thead><tr>",
+        "<th>signal date</th><th>trade date</th><th class=\"num\">top available</th>",
+        f"<th class=\"num\">top-{n} 1d</th><th class=\"num\">QQQ</th><th class=\"num\">vs QQQ</th>",
+        f"<th class=\"num\">cum top-{n}</th><th class=\"num\">cum vs QQQ</th>",
+        "</tr></thead><tbody>",
     ]
     for r in rows:
-        lines.append(
-            f"  {r['signal_date']}   {r['trade_date']}   "
-            f"{r['top_available']:>9}  "
-            f"{fmt_pct(r['top_return'])}  {fmt_pct(r['qqq_return'])}  "
-            f"{fmt_pct(r['excess_vs_qqq'])}  {fmt_pct(r['cum_top'], 8)}  "
-            f"{fmt_pct(r['cum_top_vs_qqq'], 8)}"
+        out.append(
+            "<tr>"
+            f"<td>{html.escape(r['signal_date'])}</td>"
+            f"<td>{html.escape(r['trade_date'])}</td>"
+            f"<td class=\"num\">{r['top_available']}</td>"
+            f"<td class=\"num\">{signed_pct_span(r['top_return'])}</td>"
+            f"<td class=\"num\">{signed_pct_span(r['qqq_return'])}</td>"
+            f"<td class=\"num\">{signed_pct_span(r['excess_vs_qqq'])}</td>"
+            f"<td class=\"num\">{signed_pct_span(r['cum_top'])}</td>"
+            f"<td class=\"num\">{signed_pct_span(r['cum_top_vs_qqq'])}</td>"
+            "</tr>"
         )
-    return "\n".join(lines)
+    out.append("</tbody></table>")
+    return "".join(out)
 
 
 def render_alpha_svg(alpha: dict, width: int = 900, height: int = 220,
@@ -924,123 +934,135 @@ def indent2(text: str) -> str:
     return textwrap.indent(text, "  ")
 
 
+def no_emdash(text: str) -> str:
+    return (text or "").replace("\u2014", "-")
+
+
+def signed_span(n: int) -> str:
+    cls = "up" if n > 0 else "down" if n < 0 else "zero"
+    return f'<span class="{cls}">{n:+d}</span>'
+
+
 # ───────────────────────── section renderers ─────────────────────────
-
-
-def render_hero_chart(d: dict) -> str:
-    """Big, minimalist version of the top-mentions chart for the page hero.
-    Ticker + net + a wide signed bar (today) + a small trailing sparkline
-    (recent days). The full table with bull/bear/neut/ctx columns lives below
-    as 'details'."""
-    rows = d["top_mentions"][:15]
-    if not rows:
-        return "\n     (no clean data for this day yet — run the panel)\n"
-    max_abs_net = max((abs(r["net"] or 0) for r in rows), default=0) or 1
-    HALF = 28
-    n_days = max((r.get("spark_days") or 0 for r in rows), default=0)
-    lines = [""]
-    for r in rows:
-        net = r["net"] or 0
-        sign = "+" if net > 0 else ("-" if net < 0 else " ")
-        bar_str = signed_bar(net, max_abs_net, half_width=HALF)
-        spark = r.get("sparkline") or ("·" * n_days if n_days else "")
-        lines.append(f"  ${r['ticker']:<5}  {sign}{abs(net):<3}   {bar_str}  {spark}")
-    lines.append("")
-    return "\n".join(lines)
 
 
 def render_top_mentions(d: dict) -> str:
     rows = d["top_mentions"]
     if not rows:
-        return "  (no mentions yet — run the panel to populate)"
+        return '<p class="dim">no ticker mentions were recorded for this night.</p>'
     max_abs_net = max((abs(r["net"] or 0) for r in rows), default=0) or 1
-    n_days = max((r.get("spark_days", 0) for r in rows), default=0)
-    spark_header = f"{n_days}d trend" if n_days else "trend"
-    lines = [
-        f"  rank  ticker   bull  bear  neut  ctx  net    n   avg_pos       bar (today)            {spark_header}",
-        f"  ----  ------   ----  ----  ----  ---  ----   --  -------       ──────────│──────────  {'─' * max(n_days, 4)}",
+    out = [
+        '<div class="scroll"><table class="data-table">',
+        "<thead><tr>"
+        "<th class=\"num\">rank</th><th>ticker</th>"
+        "<th class=\"num\">bull</th><th class=\"num\">bear</th>"
+        "<th class=\"num\">neut</th><th class=\"num\">ctx</th>"
+        "<th class=\"num\">net</th><th class=\"num\">n</th>"
+        "<th class=\"num\">lead position</th><th>bar</th><th>14d sparkline</th>"
+        "</tr></thead><tbody>",
     ]
     for i, r in enumerate(rows, start=1):
         net = r["net"] or 0
-        sign = "+" if net > 0 else ("-" if net < 0 else " ")
-        spark = r.get("sparkline", "")
-        lines.append(
-            f"  {i:>4}  ${r['ticker']:<5}   {r['bull']:>3}   {r['bear']:>3}   "
-            f"{r['neut']:>3}  {r['ctx']:>3}  {sign}{abs(net):<3}  {r['n']:>3}   "
-            f"{r['avg_pos']:>4.1f}    {signed_bar(net, max_abs_net)}  {spark}"
+        cls = "up" if net > 0 else "down" if net < 0 else "zero"
+        out.append(
+            "<tr>"
+            f'<td class="num">{i}</td>'
+            f'<td><strong>${html.escape(r["ticker"])}</strong></td>'
+            f'<td class="num">{r["bull"] or 0}</td>'
+            f'<td class="num">{r["bear"] or 0}</td>'
+            f'<td class="num">{r["neut"] or 0}</td>'
+            f'<td class="num">{r["ctx"] or 0}</td>'
+            f'<td class="num">{signed_span(net)}</td>'
+            f'<td class="num">{r["n"] or 0}</td>'
+            f'<td class="num">{(r["avg_pos"] or 0):.1f}</td>'
+            f'<td class="bar {cls}">{single_bar(net, max_abs_net)}</td>'
+            f'<td class="spark">{html.escape(r.get("sparkline") or "")}</td>'
+            "</tr>"
         )
-    return "\n".join(lines)
+    out.append("</tbody></table></div>")
+    return "".join(out)
 
 
 def render_persona_delta(d: dict) -> str:
     rows = d["persona_delta"]
     if not rows:
-        return "  (no data yet)"
-    lines = ["  ticker   speculator  allocator  delta"]
-    lines.append("  ------   ----------  ---------  ─────")
+        return '<p class="dim">no persona split was recorded for this night.</p>'
+    out = [
+        '<div class="scroll"><table class="data-table">',
+        "<thead><tr><th>ticker</th><th class=\"num\">speculator</th>"
+        "<th class=\"num\">allocator</th><th class=\"num\">delta</th>"
+        "</tr></thead><tbody>",
+    ]
     for r in rows[:20]:
         spec = r["spec_n"] or 0
         alloc = r["alloc_n"] or 0
         delta = spec - alloc
-        sign = "+" if delta > 0 else ("-" if delta < 0 else " ")
-        lines.append(f"  ${r['ticker']:<5}    {spec:>7}    {alloc:>7}     {sign}{abs(delta)}")
-    return "\n".join(lines)
+        out.append(
+            "<tr>"
+            f'<td>${html.escape(r["ticker"])}</td>'
+            f'<td class="num">{spec}</td>'
+            f'<td class="num">{alloc}</td>'
+            f'<td class="num">{signed_span(delta)}</td>'
+            "</tr>"
+        )
+    out.append("</tbody></table></div>")
+    return "".join(out)
 
 
 def render_samples(d: dict) -> str:
     rows = d["samples"]
     if not rows:
-        return "  (no completed responses yet)"
-    SEP = "  " + "─" * 76
-    parts = [SEP]
+        return '<p class="dim">no response excerpts are available for this night.</p>'
+    parts = []
     for s, tickers in rows:
         age = humanize_age(s["started_at"])
         prompt_one = " ".join((s["prompt_text"] or "").split())
         if len(prompt_one) > 110:
-            prompt_one = prompt_one[:107] + "..."
-        ticker_str = "  ".join(f"${t}" for t in tickers) if tickers else "—"
+            prompt_one = prompt_one[:107].rstrip() + "…"
         text = s["raw_text"] or ""
         snippet = text[:620].rstrip()
         if len(text) > 620:
-            snippet += " …"
-        body = textwrap.indent(snippet, "    ", lambda _l: True)
+            snippet = snippet.rstrip(" .,…") + "…"
+        tool_label = "enabled" if s["tools_state"] == "on" else "disabled" if s["tools_state"] == "off" else "unknown"
+        title = f"tool access: {tool_label}; output tokens: {s['tokens_out'] or 0}"
         parts.append(
-            f"  resp #{s['resp_id']}  ·  {age}  ·  "
-            f"{s['prompt_id']} × {s['persona_id']} × "
-            f"{s['provider']}/{s['tools_state']}  ·  "
-            f"{s['tokens_out'] or 0} out_tokens"
+            '<figure class="exhibit">'
+            f'<figcaption class="label" title="{html.escape(title)}">'
+            f'response #{s["resp_id"]} · {html.escape(age)} · '
+            f'{html.escape(s["prompt_id"])} x {html.escape(s["persona_id"])} x '
+            f'{html.escape(s["provider"])}'
+            '</figcaption>'
+            f'<p class="exhibit-question">{html.escape(no_emdash(prompt_one))}</p>'
+            f'<pre class="exhibit-body">{html.escape(no_emdash(snippet))}</pre>'
+            '</figure>'
         )
-        parts.append(f"  Q:  {prompt_one}")
-        parts.append(f"  AI named:  {ticker_str}")
-        parts.append("")
-        parts.append(body)
-        parts.append(SEP)
-    return "\n".join(parts)
+    return "".join(parts)
 
 
-def render_prompts(d: dict) -> str:
+def render_prompts_html(d: dict) -> str:
     rows = d["prompts"]
     if not rows:
-        return "  (no prompts registered)"
-    out = []
-    current_cat = None
+        return '<p class="dim">no questions are registered.</p>'
     cat_labels = {
-        "portfolio": "portfolio construction · 4 questions",
-        "single_name": "single-name views · 3 questions",
-        "sector_macro": "sector / macro · 3 questions",
+        "portfolio": "portfolio construction",
+        "single_name": "single-name views",
+        "sector_macro": "sector and macro",
     }
+    out = ['<div class="prompt-list">']
+    current_cat = None
     for r in rows:
         if r["category"] != current_cat:
             current_cat = r["category"]
-            out.append("")
-            out.append(f"  ── {cat_labels.get(current_cat, current_cat)}")
-        text = " ".join((r["text"] or "").split())
-        wrapped = textwrap.fill(
-            text, width=72, initial_indent="    ", subsequent_indent="    "
+            out.append(f'<h3>{html.escape(cat_labels.get(current_cat, current_cat))}</h3>')
+        text = " ".join(no_emdash(r["text"] or "").split())
+        out.append(
+            '<div class="prompt-item">'
+            f'<div class="prompt-id">{html.escape(r["id"])}</div>'
+            f'<p>{html.escape(text)}</p>'
+            '</div>'
         )
-        out.append(f"  [{r['id']}]")
-        out.append(wrapped)
-    return "\n".join(out).lstrip()
+    out.append("</div>")
+    return "".join(out)
 
 
 def render_personas(d: dict) -> str:
@@ -1050,7 +1072,7 @@ def render_personas(d: dict) -> str:
     out = []
     for r in rows:
         out.append(f"  ▸ {r['label'].lower()}  [{r['id']}]")
-        body = " ".join((r["description"] or "").split())
+        body = " ".join(no_emdash(r["description"] or "").split())
         wrapped = textwrap.fill(
             body, width=74, initial_indent="    ", subsequent_indent="    "
         )
@@ -1060,51 +1082,58 @@ def render_personas(d: dict) -> str:
 
 
 def render_model_configs(d: dict) -> str:
-    rows = d["model_configs"]
+    rows = load_model_configs_from_yaml() or [dict(r) for r in d["model_configs"]]
     if not rows:
-        return "  (no model_configs registered)"
-    lines = ["  id                          provider  model"]
-    lines.append("  --------------------------  --------  ------------------")
+        return '<p class="dim">no model surfaces are configured.</p>'
+    out = [
+        '<div class="scroll"><table class="data-table">',
+        "<thead><tr><th>surface</th><th>provider</th><th>model</th><th>call path</th></tr></thead><tbody>",
+    ]
     for r in rows:
-        lines.append(f"  {r['id']:<26}  {r['provider']:<8}  {r['model_name']}")
-    return "\n".join(lines)
-
-
-def render_runs(d: dict) -> str:
-    rows = d["runs"]
-    if not rows:
-        return "  (no runs yet)"
-    lines = ["  run_id  started_at (utc)         status       tuples  ok  fail  refused"]
-    lines.append("  ------  -----------------------  ----------   ------  --  ----  -------")
-    for r in rows:
-        started_short = (r["started_at"] or "")[:19].replace("T", " ")
-        lines.append(
-            f"  {r['id']:>5}   {started_short:<23}  {r['status']:<10}     "
-            f"{r['n_total']:>2}    {r['n_ok']:>2}   {r['n_fail']:>2}    {r['n_refused']:>3}"
+        cmd = r.get("cli_command") or ""
+        sub = r.get("subcommand") or ""
+        call_path = " ".join(p for p in [cmd, sub] if p and p != "null")
+        out.append(
+            "<tr>"
+            f'<td>{html.escape(r.get("id") or "")}</td>'
+            f'<td>{html.escape(r.get("provider") or "")}</td>'
+            f'<td>{html.escape(r.get("model_name") or "")}</td>'
+            f'<td>{html.escape(call_path)}</td>'
+            "</tr>"
         )
-    return "\n".join(lines)
+    out.append("</tbody></table></div>")
+    return "".join(out)
 
 
 def render_rolling_top(rows: list[dict], window_label: str) -> str:
     if not rows:
-        return f"  (no data in window: {window_label})"
+        return f'<p class="dim">no recommendation flow in this {html.escape(window_label)} window yet.</p>'
     max_abs_net = max((abs(r.get("net") or 0) for r in rows), default=0) or 1
-    n_days = max((r.get("spark_days") or 0 for r in rows), default=0)
-    spark_header = f"{n_days}d trend" if n_days else "trend"
-    lines = [
-        f"  rank  ticker   bull  bear  net    n    days       bar (net)              {spark_header}",
-        f"  ----  ------   ----  ----  ----   --   ----       ──────────│──────────  {'─' * max(n_days, 4)}",
+    spark_header = "30d sparkline"
+    out = [
+        '<div class="scroll"><table class="data-table">',
+        "<thead><tr>",
+        "<th class=\"num\">rank</th><th>ticker</th>",
+        "<th class=\"num\">bull</th><th class=\"num\">bear</th><th class=\"num\">net</th>",
+        f"<th>bar</th><th class=\"spark\">{html.escape(spark_header)}</th>",
+        "</tr></thead><tbody>",
     ]
     for i, r in enumerate(rows, start=1):
         net = r.get("net") or 0
-        sign = "+" if net > 0 else ("-" if net < 0 else " ")
-        spark = r.get("sparkline", "")
-        lines.append(
-            f"  {i:>4}  ${r['ticker']:<5}   {r.get('bull') or 0:>3}   {r.get('bear') or 0:>3}   "
-            f"{sign}{abs(net):<3}  {r.get('n') or 0:>3}    {r.get('days_seen') or 0:>3}    "
-            f"{signed_bar(net, max_abs_net)}  {spark}"
+        cls = signed_class(net)
+        out.append(
+            "<tr>"
+            f"<td class=\"num\">{i}</td>"
+            f"<td><strong>${html.escape(r['ticker'])}</strong></td>"
+            f"<td class=\"num\">{r.get('bull') or 0}</td>"
+            f"<td class=\"num\">{r.get('bear') or 0}</td>"
+            f"<td class=\"num\">{signed_int_span(net)}</td>"
+            f"<td class=\"bar {cls}\">{html.escape(single_bar(net, max_abs_net))}</td>"
+            f"<td class=\"spark\">{html.escape(r.get('sparkline') or '')}</td>"
+            "</tr>"
         )
-    return "\n".join(lines)
+    out.append("</tbody></table></div>")
+    return "".join(out)
 
 
 def render_provider_heading(provider: str) -> str:
@@ -1132,7 +1161,7 @@ def provider_cell(row: dict, provider: str) -> str:
 def render_first_sightings(rows: list[dict], providers: list[str],
                            compact: bool = False) -> str:
     if not rows:
-        return '<pre class="tbl">  (no first sightings yet)</pre>'
+        return '<p class="dim">no first sightings yet.</p>'
     providers = providers or []
     lines = [
         '<div class="scroll"><table class="data-table provider-table">',
@@ -1166,7 +1195,7 @@ def render_first_sightings(rows: list[dict], providers: list[str],
 def render_consensus(rows: list[dict], providers: list[str],
                      compact: bool = False) -> str:
     if not rows:
-        return '<pre class="tbl">  (no tickers yet where multiple providers were bullish)</pre>'
+        return '<p class="dim">no tickers yet where multiple providers were bullish.</p>'
     n_days = max((r.get("spark_days") or 0 for r in rows), default=0)
     spark_header = f"{n_days}d trend" if n_days else "trend"
     providers = providers or []
@@ -1206,38 +1235,29 @@ def render_consensus(rows: list[dict], providers: list[str],
 
 def render_days_index(rows: list[dict]) -> str:
     if not rows:
-        return "  (no clean days yet)"
-    lines = ["  day          n_resp  unique_tickers   top pick                link"]
-    lines.append("  ----------   ------  --------------   ----------------------  -----------------")
+        return '<p class="dim">no nights yet.</p>'
+    out = [
+        '<div class="scroll"><table class="data-table">',
+        "<thead><tr>",
+        "<th>night</th><th class=\"num\">responses</th><th class=\"num\">unique tickers</th><th class=\"num\">top pick</th>",
+        "</tr></thead><tbody>",
+    ]
     for r in rows:
-        lead = ""
+        lead = '<span class="zero">n/a</span>'
         if r.get("lead_ticker"):
             net = r.get("lead_net") or 0
-            sign = "+" if net > 0 else ("-" if net < 0 else " ")
-            lead = f"${r['lead_ticker']:<5} ({sign}{abs(net)})"
-        link = f"day/{r['day']}.html"
-        lines.append(
-            f"  {r['day']}   {r.get('n_responses') or 0:>4}    {r.get('n_unique') or 0:>4}            "
-            f"{lead:<22}  → {link}"
+            lead = f'${html.escape(r["lead_ticker"])} {signed_int_span(net)}'
+        day = r["day"]
+        out.append(
+            "<tr>"
+            f'<td><a href="day/{html.escape(day)}.html">{html.escape(day)}</a></td>'
+            f'<td class="num">{r.get("n_responses") or 0}</td>'
+            f'<td class="num">{r.get("n_unique") or 0}</td>'
+            f'<td class="num">{lead}</td>'
+            "</tr>"
         )
-    return "\n".join(lines)
-
-
-def render_overview(d: dict) -> str:
-    c = d["counts"]
-    lr = d["latest_run"]
-    latest = (
-        f"#{lr['id']}  status={lr['status']}  {humanize_age(lr['finished_at'] or lr['started_at'])}"
-        if lr else "—"
-    )
-    return (
-        f"  runs              {c['n_runs']:>6}\n"
-        f"  responses_ok      {c['n_responses_ok']:>6}    "
-        f"(failures: {c['n_responses_fail']}, refused: {c['n_refused']})\n"
-        f"  mentions          {c['n_mentions']:>6}\n"
-        f"  unique_tickers    {c['n_unique_tickers']:>6}\n"
-        f"  latest_run        {latest}"
-    )
+    out.append("</tbody></table></div>")
+    return "".join(out)
 
 
 # ───────────────────────── html template ─────────────────────────
@@ -1385,6 +1405,15 @@ footer { margin-top: calc(var(--lh) * 4); padding-top: var(--lh); border-top: 1p
   .flow-table .bar { width: 18ch; }
   th, td { padding-right: 0.5ch; }
 }
+/* phase2c */
+.prose { max-width: 72ch; }
+.method-block { margin-top: var(--lh); }
+.prompt-list { display: grid; gap: var(--lh); max-width: 72ch; }
+.prompt-item { padding-bottom: var(--lh); border-bottom: 1px solid var(--faint); }
+.prompt-id { color: var(--accent); font-weight: 700; }
+.exhibit { margin: var(--lh) 0 0; padding-top: calc(var(--lh) * 0.5); border-top: 1px solid var(--faint); }
+.exhibit-question { max-width: 72ch; color: var(--dim); }
+.exhibit-body { max-width: 72ch; color: var(--ink); }
 """
 
 PAGE_TMPL = """<!doctype html>
@@ -1426,13 +1455,14 @@ DESCRIPTIONS = {
     "day": "full nightly pythia panel artifact with ticker flow, model samples, and prompts.",
     "trends": "rolling pythia recommendation flow, first sightings, and provider consensus.",
     "alpha": "pythia paper scoreboard comparing the top-20 basket with QQQ.",
-    "prompts": "pythia methodology, prompts, personas, and model surfaces.",
+    "methodology": "pythia methodology, prompts, personas, and model surfaces.",
 }
 
 
 def page_shell(title: str, page: str, masthead: str, nav: str, day_nav: str,
-               content: str, footer: str, root_prefix: str = "") -> str:
-    desc = DESCRIPTIONS.get(page, DESCRIPTIONS["index"])
+               content: str, footer: str, root_prefix: str = "",
+               description: str | None = None) -> str:
+    desc = description or DESCRIPTIONS.get(page, DESCRIPTIONS["index"])
     return PAGE_TMPL.format(
         title=html.escape(title),
         description=html.escape(desc),
@@ -1503,7 +1533,7 @@ def render_main_nav(root_prefix: str = "") -> str:
         ("index", "index.html"),
         ("trends", "trends.html"),
         ("scoreboard", "alpha.html"),
-        ("methodology", "prompts.html"),
+        ("methodology", "methodology.html"),
     ]
     return '<nav class="nav">' + "".join(
         f'<a href="{html.escape(root_prefix + href)}">{label}</a>'
@@ -1514,7 +1544,7 @@ def render_main_nav(root_prefix: str = "") -> str:
 def render_footer(root_prefix: str = "") -> str:
     return (
         '<footer>'
-        f'<a href="{html.escape(root_prefix)}prompts.html">methodology</a> · '
+        f'<a href="{html.escape(root_prefix)}methodology.html">methodology</a> · '
         f'<a href="https://{html.escape(REPO_URL)}">raw data</a> · '
         'not investment advice; a public measurement experiment'
         '</footer>'
@@ -1781,38 +1811,29 @@ def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[s
 
 
 def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
-    counts = d["counts"]
-    intro_findings = INTRO_FINDINGS.format(
-        n_runs=counts["n_runs"],
-        n_responses=counts["n_responses_ok"],
-        n_unique=counts["n_unique_tickers"],
-    ).replace("run(s)", "night(s)")
     root_prefix = "../" if not is_index else ""
     content = f"""
 <section id="flow">
-  <div class="label">TONIGHT'S FLOW · {html.escape(day)}</div>
+  <div class="label">TONIGHT'S FLOW · {html.escape(day)} · net = bullish − bearish mentions across 60 responses</div>
   {render_flow_table(d, day)}
 </section>
-<section id="findings">
-  <h2>DETAILS</h2>
-  <pre class="intro">{html.escape(intro_findings)}</pre>
-  <h3>full breakdown: bull / bear / neut / ctx per ticker</h3>
-  <div class="scroll"><pre class="tbl">{html.escape(render_top_mentions(d))}</pre></div>
-  <h3>who is asking?</h3>
-  <div class="scroll"><pre class="tbl">{html.escape(render_persona_delta(d))}</pre></div>
+
+<section id="full-breakdown">
+  <h2>FULL BREAKDOWN</h2>
+  <p class="intro prose">{html.escape(no_emdash(INTRO_TOP_MENTIONS))}</p>
+  {render_top_mentions(d)}
 </section>
+
+<section id="persona-delta">
+  <h2>DOES IT MATTER WHO'S ASKING?</h2>
+  <p class="intro prose">{html.escape(no_emdash(INTRO_PERSONA_DELTA))}</p>
+  {render_persona_delta(d)}
+</section>
+
 <section id="samples">
   <h2>SEE FOR YOURSELF</h2>
-  <div class="scroll"><pre>{html.escape(render_samples(d))}</pre></div>
-</section>
-<section id="method">
-  <h2>METHOD</h2>
-  <h3>the 10 questions</h3>
-  <div class="scroll"><pre>{html.escape(render_prompts(d))}</pre></div>
-  <h3>the 2 personas</h3>
-  <div class="scroll"><pre>{html.escape(render_personas(d))}</pre></div>
-  <h3>model surfaces</h3>
-  <div class="scroll"><pre class="tbl">{html.escape(render_model_configs(d))}</pre></div>
+  <p class="intro prose">{html.escape(no_emdash(INTRO_SAMPLES))}</p>
+  {render_samples(d)}
 </section>
 """
     return page_shell(
@@ -1824,6 +1845,7 @@ def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
         content=content,
         footer=render_footer(root_prefix),
         root_prefix=root_prefix,
+        description=f"what frontier AI models told people to buy on {day}",
     )
 
 
@@ -1831,27 +1853,33 @@ def render_trends_page(d: dict, trends: dict, days: list[str], n_total_responses
     content = f"""
 <section id="rolling7">
   <h2>LAST 7 DAYS</h2>
-  <div class="scroll"><pre class="tbl">{html.escape(render_rolling_top(trends["top_7d"], "7 days"))}</pre></div>
+  <div class="label">ROLLING WINDOW</div>
+  {render_rolling_top(trends["top_7d"], "7 days")}
 </section>
 <section id="rolling30">
   <h2>LAST 30 DAYS</h2>
-  <div class="scroll"><pre class="tbl">{html.escape(render_rolling_top(trends["top_30d"], "30 days"))}</pre></div>
+  <div class="label">ROLLING WINDOW</div>
+  {render_rolling_top(trends["top_30d"], "30 days")}
 </section>
 <section id="alltime">
   <h2>ALL TIME</h2>
-  <div class="scroll"><pre class="tbl">{html.escape(render_rolling_top(trends["top_all"], "all-time"))}</pre></div>
+  <div class="label">CUMULATIVE WINDOW</div>
+  {render_rolling_top(trends["top_all"], "all-time")}
 </section>
 <section id="first-sightings">
   <h2>FIRST SIGHTINGS</h2>
+  <div class="label">NEWEST TICKERS BY FIRST NIGHT SEEN</div>
   {render_first_sightings(trends["first_sightings"], trends["providers"])}
 </section>
 <section id="consensus">
   <h2>CONSENSUS</h2>
+  <div class="label">TICKERS WITH BULLISH FLOW FROM MULTIPLE PROVIDERS</div>
   {render_consensus(trends["consensus"], trends["providers"])}
 </section>
 <section id="days">
   <h2>ALL NIGHTS</h2>
-  <div class="scroll"><pre class="tbl">{html.escape(render_days_index(trends["days_index"]).replace("clean days", "nights"))}</pre></div>
+  <div class="label">NIGHTLY PANEL INDEX</div>
+  {render_days_index(trends["days_index"])}
 </section>
 """
     return page_shell(
@@ -1866,32 +1894,37 @@ def render_trends_page(d: dict, trends: dict, days: list[str], n_total_responses
 
 
 def render_alpha_page(alpha: dict, d: dict, days: list[str]) -> str:
-    definition = (
-        "signal date = panel timestamp converted to ET calendar date\n"
-        "basket = top 20 tickers by daily net score, equal weighted\n"
-        "entry = next market session open\n"
-        "exit = same market session close\n"
-        "QQQ = same-session benchmark\n"
-        "weekend and holiday panels that share a session are collapsed to the last signal\n\n"
-        "this is a paper benchmark, not a tradable recommendation. it asks whether the ranking contains signal before sector, factor, liquidity, or prompt-seed controls."
+    chart = (
+        render_alpha_svg(alpha)
+        if alpha.get("available")
+        else '<p class="dim">no scoreboard data yet; the first benchmark session lands after the next market open.</p>'
     )
     content = f"""
-<section>
+<section id="curve">
   <div class="label">CUMULATIVE BASKET AND QQQ</div>
-  {render_alpha_svg(alpha)}
+  {chart}
   <div class="source">{render_alpha_source(alpha)}</div>
 </section>
-<section>
-  <h2>DEFINITION</h2>
-  <pre class="intro">{html.escape(definition)}</pre>
+<section id="headline">
+  <h2>SCOREBOARD</h2>
+  {render_scoreboard_stat(alpha)}
 </section>
-<section>
+<section id="definition">
+  <h2>BENCHMARK DEFINITION</h2>
+  <div class="label">WHAT IS BEING MEASURED</div>
+  <p class="dek">The signal date is the panel timestamp converted to the ET calendar date. For each signal date, the basket is the top 20 tickers by net score, equal weighted and unhedged. The entry is the next market session open, and the exit is that same session close. QQQ is measured over the same open to close session.</p>
+  <p class="dek">If weekend or holiday signals point to the same next market session, only the last signal for that session is kept. That prevents duplicate panels from counting the same trade window more than once.</p>
+  <p class="dek">Caveats: this is a paper benchmark with no execution costs or slippage. There is no look-ahead: the signal is timestamped before the next open, while prices are fetched after the session. The sample is still small. The basket is fixed at signal time, so later winners or deleted names are not added after the fact.</p>
+</section>
+<section id="running-averages">
   <h2>RUNNING AVERAGES</h2>
-  <div class="scroll"><pre class="tbl">{html.escape(render_alpha_summary(alpha))}</pre></div>
+  <div class="label">SESSION MEANS AND CUMULATIVE RETURNS</div>
+  <div class="scroll">{render_alpha_summary(alpha)}</div>
 </section>
-<section>
+<section id="daily-rows">
   <h2>DAILY ROWS</h2>
-  <div class="scroll"><pre class="tbl">{html.escape(render_alpha_table(alpha))}</pre></div>
+  <div class="label">ONE ROW PER BENCHMARK SESSION</div>
+  <div class="scroll">{render_alpha_table(alpha)}</div>
 </section>
 """
     return page_shell(
@@ -1905,30 +1938,102 @@ def render_alpha_page(alpha: dict, d: dict, days: list[str]) -> str:
     )
 
 
-def render_prompts_page(d: dict, days: list[str], preamble: str, assembled_on: str) -> str:
+def render_methodology_page(d: dict, days: list[str], preamble: str, assembled_on: str) -> str:
+    why = (
+        "Pythia measures the recommendation flow retail investors receive from "
+        "frontier AI systems. People already ask these models what to buy. This "
+        "site records the tickers named, the stance attached to each mention, "
+        "and how the answer changes by persona."
+    )
+    night = (
+        "Each night runs 10 questions through 2 personas and 3 configured model "
+        "surfaces, for 60 responses when every call succeeds. Each model is "
+        "invoked through its production agent harness: Claude Code for claude, "
+        "the Codex CLI for gpt, and the google-genai SDK with Google Search "
+        "grounding for gemini, with web and search tools available where the "
+        "surface supports them. Consumer chat surfaces (chatgpt.com, claude.ai, "
+        "gemini.google.com) are not yet measured."
+    )
+    assembly = (
+        "A prompt is assembled as persona context, global preamble, then the "
+        "question, asked verbatim. The preamble instructs the model to ground "
+        "its answer in current market state and to prefix every ticker with $ "
+        "so extraction is deterministic; compliance with the $ rule has been "
+        "roughly 100% so far. The example below is the literal string sent to "
+        "the model."
+    )
+    personas_note = (
+        "The two personas bracket the spectrum of who plausibly asks an AI for "
+        "investment advice. Together they measure how much a model changes its "
+        "tune based on who it thinks is listening."
+    )
+    seeded_note = (
+        "Some questions deliberately name tickers, mirroring real retail "
+        "queries. The recommendation volume those names receive is part of the "
+        "signal being measured, not a bias to scrub."
+    )
+    classification = (
+        "Ticker extraction keys off $TICKER tokens. Each mention is then judged "
+        "as bullish, bearish, neutral, or context by a smaller model. Uncertain "
+        "labels are held back for review and excluded from public flow counts. "
+        "Refusals and errored responses are counted in run totals and excluded "
+        "from recommendation flow."
+    )
+    raw = (
+        f"Raw rows live in the SQLite database, with gzipped traces for replay. "
+        f"The source repository is https://{REPO_URL}."
+    )
     content = f"""
-<section>
-  <h2>ASSEMBLY</h2>
-  <pre class="intro">every model receives one assembled string: persona context, global preamble, then the question.</pre>
+<section id="what">
+  <h2>WHAT PYTHIA MEASURES AND WHY</h2>
+  <p class="prose">{html.escape(why)}</p>
+</section>
+
+<section id="night-run">
+  <h2>HOW A NIGHT RUNS</h2>
+  <p class="prose">{html.escape(night)}</p>
+  {render_model_configs(d)}
+</section>
+
+<section id="assembly">
+  <h2>HOW A PROMPT IS ASSEMBLED</h2>
+  <p class="prose">{html.escape(assembly)}</p>
   <h3>example: portfolio_01 x speculator</h3>
-  <div class="scroll"><pre>{html.escape(assembled_on)}</pre></div>
+  <div class="scroll method-block"><pre>{html.escape(no_emdash(assembled_on))}</pre></div>
+  <h3>preamble</h3>
+  <div class="scroll method-block"><pre>{html.escape(no_emdash("  " + preamble.replace(chr(10), chr(10) + "  ") if preamble else "missing"))}</pre></div>
+  <h3>personas</h3>
+  <p class="prose">{html.escape(personas_note)}</p>
+  <div class="scroll method-block"><pre>{html.escape(render_personas(d))}</pre></div>
 </section>
-<section>
-  <h2>PREAMBLE</h2>
-  <div class="scroll"><pre>{html.escape("  " + preamble.replace(chr(10), chr(10) + "  ") if preamble else "missing")}</pre></div>
+
+<section id="questions">
+  <h2>THE 10 QUESTIONS</h2>
+  <p class="prose">{html.escape(seeded_note)}</p>
+  {render_prompts_html(d)}
 </section>
-<section>
-  <h2>PERSONAS</h2>
-  <div class="scroll"><pre>{html.escape(render_personas(d))}</pre></div>
+
+<section id="classification">
+  <h2>HOW MENTIONS ARE CLASSIFIED</h2>
+  <p class="prose">{html.escape(classification)}</p>
 </section>
-<section>
-  <h2>QUESTIONS</h2>
-  <div class="scroll"><pre>{html.escape(render_prompts(d))}</pre></div>
+
+<section id="caveats">
+  <h2>CAVEATS</h2>
+  <p class="prose">The scoreboard is a paper benchmark. It ignores execution costs, spread, taxes, capacity, and market impact.</p>
+  <p class="prose method-block">The sample is small. It is useful as a public measurement feed, not proof of durable alpha.</p>
+  <p class="prose method-block">This dashboard is public, so models with search tools can in principle read it. We note that feedback loop rather than pretend it cannot exist.</p>
+  <p class="prose method-block">Recommendation flow measures what models say, not what anyone should buy. It is not investment advice.</p>
+</section>
+
+<section id="raw-data">
+  <h2>RAW DATA</h2>
+  <p class="prose">{html.escape(raw)}</p>
 </section>
 """
     return page_shell(
         title="pythia: methodology",
-        page="prompts",
+        page="methodology",
         masthead=render_masthead(d, len(days), page_name="methodology", compact=True),
         nav=render_main_nav(),
         day_nav="",
@@ -2008,9 +2113,13 @@ def main() -> int:
             )
         else:
             assembled_on = "unavailable: db missing prompts or personas"
-        prompts_page = render_prompts_page(d, days, preamble, assembled_on)
-        OUT_PROMPTS_PATH.write_text(prompts_page, encoding="utf-8")
-        print(f"wrote {OUT_PROMPTS_PATH}  ({len(prompts_page)} bytes)")
+        methodology_page = render_methodology_page(d, days, preamble, assembled_on)
+        OUT_METHODOLOGY_PATH.write_text(methodology_page, encoding="utf-8")
+        print(f"wrote {OUT_METHODOLOGY_PATH}  ({len(methodology_page)} bytes)")
+        old_prompts_path = out_dir / "prompts.html"
+        if old_prompts_path.exists():
+            old_prompts_path.unlink()
+            print(f"removed {old_prompts_path}")
     finally:
         con.close()
     return 0
