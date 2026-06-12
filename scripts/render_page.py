@@ -186,10 +186,9 @@ INTRO_PERSONA_DELTA = """\
 we ask the same questions as two different investors: a 28-year-old
 speculator and a family-office allocator. the counts are bullish
 mentions only: how often each audience was told to buy the name.
-delta is the gap between the two; skew divides that gap by the
-ticker's total bullish mentions, so +100% means a name pitched only
-to the speculator and -100% only to the allocator. treat skew on
-thinly mentioned names with caution."""
+lean shows which audience a name is pitched to, and how lopsidedly:
+100% speculator means every bullish mention went to the speculator.
+treat lean on thinly mentioned names with caution."""
 
 
 INTRO_SAMPLES = """\
@@ -1023,6 +1022,19 @@ def render_top_mentions(d: dict) -> str:
     return "".join(out)
 
 
+def persona_lean(spec: int, alloc: int) -> str:
+    """Unsigned plain-words tilt: '100% speculator', '73% allocator', 'even'.
+    Audience routing has no good/bad valence, so no up/down colors here."""
+    total = spec + alloc
+    if not total:
+        return '<span class="zero">n/a</span>'
+    if spec == alloc:
+        return '<span class="dim">even</span>'
+    if spec > alloc:
+        return f"{round(100 * spec / total)}% speculator"
+    return f"{round(100 * alloc / total)}% allocator"
+
+
 def render_persona_delta(d: dict) -> str:
     rows = d["persona_delta"]
     if not rows:
@@ -1030,28 +1042,18 @@ def render_persona_delta(d: dict) -> str:
     out = [
         '<div class="scroll"><table class="data-table">',
         "<thead><tr><th>ticker</th><th class=\"num\">speculator</th>"
-        "<th class=\"num\">allocator</th><th class=\"num\">delta</th>"
-        "<th class=\"num\">skew</th>"
+        "<th class=\"num\">allocator</th><th>lean</th>"
         "</tr></thead><tbody>",
     ]
     for r in rows[:20]:
         spec = r["spec_n"] or 0
         alloc = r["alloc_n"] or 0
-        delta = spec - alloc
-        total = spec + alloc
-        if total:
-            skew = round(100 * delta / total)
-            cls = "up" if skew > 0 else "down" if skew < 0 else "zero"
-            skew_cell = f'<span class="{cls}">{skew:+d}%</span>'
-        else:
-            skew_cell = '<span class="zero">n/a</span>'
         out.append(
             "<tr>"
             f'<td>${html.escape(r["ticker"])}</td>'
             f'<td class="num">{spec}</td>'
             f'<td class="num">{alloc}</td>'
-            f'<td class="num">{signed_span(delta)}</td>'
-            f'<td class="num">{skew_cell}</td>'
+            f'<td>{persona_lean(spec, alloc)}</td>'
             "</tr>"
         )
     out.append("</tbody></table></div>")
@@ -1388,6 +1390,7 @@ h3 { margin-top: calc(var(--lh) * 1.5); font-size: 14px; line-height: var(--lh);
 .masthead { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 4ch; padding-bottom: var(--lh); border-bottom: 1px solid var(--faint); }
 .wordmark-link { color: var(--ink); }
 .wordmark-link:hover { color: var(--accent); text-decoration: none; }
+.nb { white-space: nowrap; }
 .dek { margin-top: var(--lh); max-width: 72ch; color: var(--dim); }
 .stamp { text-align: right; color: var(--dim); }
 .stamp strong { color: var(--accent); font-weight: 700; }
@@ -1813,24 +1816,23 @@ def render_persona_teaser(d: dict, day: str) -> str:
         alloc = r["alloc_n"] or 0
         total = spec + alloc
         if total >= 4:
-            rows.append((r["ticker"], spec, alloc, round(100 * (spec - alloc) / total)))
-    rows.sort(key=lambda r: (-abs(r[3]), -(r[1] + r[2])))
+            rows.append((r["ticker"], spec, alloc))
+    rows.sort(key=lambda r: (-abs(r[1] / (r[1] + r[2]) - 0.5), -(r[1] + r[2])))
     rows = rows[:5]
     if not rows:
         return '<p class="dim">no persona split recorded for this night yet.</p>'
     out = [
         '<div class="scroll"><table class="data-table">',
         "<thead><tr><th>ticker</th><th class=\"num\">spec</th>"
-        "<th class=\"num\">alloc</th><th class=\"num\">skew</th></tr></thead><tbody>",
+        "<th class=\"num\">alloc</th><th>lean</th></tr></thead><tbody>",
     ]
-    for ticker, spec, alloc, skew in rows:
-        cls = "up" if skew > 0 else "down" if skew < 0 else "zero"
+    for ticker, spec, alloc in rows:
         out.append(
             "<tr>"
             f'<td>${html.escape(ticker)}</td>'
             f'<td class="num">{spec}</td>'
             f'<td class="num">{alloc}</td>'
-            f'<td class="num"><span class="{cls}">{skew:+d}%</span></td>'
+            f'<td>{persona_lean(spec, alloc)}</td>'
             "</tr>"
         )
     out.append("</tbody></table></div>")
@@ -1873,7 +1875,7 @@ def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[s
   </section>
   <section id="personas">
     <h2>WHO'S ASKING</h2>
-    <div class="label">BULLISH MENTIONS ONLY · SKEW = GAP / TOTAL · NIGHT OF {html.escape(day)}</div>
+    <div class="label">BULLISH MENTIONS BY PERSONA · <span class="nb">NIGHT OF {html.escape(day)}</span></div>
     {render_persona_teaser(d, day)}
     <div class="more"><a href="day/{html.escape(day)}.html#persona-delta">full table</a></div>
   </section>
@@ -1888,7 +1890,7 @@ def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[s
 <details>
   <summary>terms</summary>
   <div class="details-body">
-    <p>net means bullish mentions minus bearish mentions. flow is the ranked push models gave tickers on the night shown. first sighting means the first night a ticker appeared in the logged panel. consensus means more than one provider pushed the same ticker bullish. skew is the speculator-allocator gap in bullish mentions divided by the ticker's total bullish mentions.</p>
+    <p>net means bullish mentions minus bearish mentions. flow is the ranked push models gave tickers on the night shown. first sighting means the first night a ticker appeared in the logged panel. consensus means more than one provider pushed the same ticker bullish. lean is the share of a ticker's bullish mentions that went to its dominant audience, speculator or allocator.</p>
   </div>
 </details>
 """
