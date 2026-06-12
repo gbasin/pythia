@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pyyaml>=6.0"]
+# dependencies = []
 # ///
 """Render AI-Rec-Panel state to a static HTML page.
 
@@ -19,10 +19,9 @@ import os
 import shutil
 import sqlite3
 import textwrap
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-
-import yaml
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("PYTHIA_DB_PATH", ROOT / "db" / "panel.sqlite"))
@@ -36,6 +35,7 @@ OUT_PATH = OUT_DIR / "index.html"
 OUT_PROMPTS_PATH = OUT_DIR / "prompts.html"
 OUT_TRENDS_PATH = OUT_DIR / "trends.html"
 OUT_ALPHA_PATH = OUT_DIR / "alpha.html"
+ET = ZoneInfo("America/New_York")
 
 # Mirrors TOOLS_OFF_SUFFIX in scripts/run_panel.py — duplicated so the
 # review page can show the exact text models see for tools_off runs.
@@ -55,11 +55,22 @@ PROVIDER_ICONS = {
 
 def load_preamble() -> str:
     try:
-        with PROMPTS_YAML_PATH.open() as f:
-            data = yaml.safe_load(f) or {}
-        return (data.get("preamble") or "").strip()
+        lines = PROMPTS_YAML_PATH.read_text(encoding="utf-8").splitlines()
     except Exception:
         return ""
+    for i, line in enumerate(lines):
+        if line.strip() != "preamble: |":
+            continue
+        out = []
+        for body_line in lines[i + 1:]:
+            if body_line and not body_line.startswith(" "):
+                break
+            if body_line.startswith("  "):
+                out.append(body_line[2:])
+            else:
+                out.append("")
+        return "\n".join(out).strip()
+    return ""
 
 
 def assemble_example(persona_desc: str, prompt_text: str, preamble: str, tools_state: str) -> str:
@@ -791,6 +802,20 @@ def fmt_pct(value: float | None, width: int = 7) -> str:
     return f"{value * 100:{width}.2f}%"
 
 
+def fmt_signed_pct(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value * 100:+.2f}%"
+
+
+def ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def render_alpha_summary(alpha: dict) -> str:
     if not alpha.get("available"):
         return "  alpha benchmark not built yet. run: uv run scripts/benchmark_alpha.py --rebuild-signals"
@@ -833,52 +858,65 @@ def render_alpha_svg(alpha: dict, width: int = 900, height: int = 220,
         return '<pre class="tbl">  (alpha benchmark not built yet)</pre>'
 
     n = alpha.get("top_n", 20)
-    left, right, top, bottom = 48, 16, 22, 34
+    left, right, top, bottom = 12, 72, 20, 28
     chart_w = width - left - right
     chart_h = height - top - bottom
-    # Primary (highlighted): cumulative top-N excess over QQQ. Secondary: the
-    # raw unhedged top-N basket return.
-    primary_values = [r["cum_top_vs_qqq"] for r in rows]
-    raw_values = [r["cum_top"] for r in rows]
-    max_abs = max([abs(v) for v in primary_values + raw_values] or [0.01]) or 0.01
-    y_mid = top + chart_h / 2
+    model_values = [r["cum_top"] for r in rows]
+    qqq_values = [r["cum_top"] - r["cum_top_vs_qqq"] for r in rows]
+    values = model_values + qqq_values + [0.0]
+    lo, hi = min(values), max(values)
+    if lo == hi:
+        lo -= 0.01
+        hi += 0.01
+    pad = (hi - lo) * 0.12
+    lo -= pad
+    hi += pad
 
     def x_at(i: int) -> float:
-        if len(primary_values) == 1:
+        if len(model_values) == 1:
             return left + chart_w
-        return left + chart_w * i / (len(primary_values) - 1)
+        return left + chart_w * i / (len(model_values) - 1)
 
     def y_at(v: float) -> float:
-        return y_mid - (v / max_abs) * (chart_h / 2)
+        return top + (hi - v) / (hi - lo) * chart_h
 
-    primary_points = " ".join(f"{x_at(i):.1f},{y_at(v):.1f}" for i, v in enumerate(primary_values))
-    raw_points = " ".join(f"{x_at(i):.1f},{y_at(v):.1f}" for i, v in enumerate(raw_values))
-    zero = y_mid
-    latest = primary_values[-1]
-    latest_raw = raw_values[-1]
-    latest_x = x_at(len(primary_values) - 1)
-    latest_y = y_at(latest)
-    color = "#6ad08a" if latest >= 0 else "#e36a6a"
-    raw_color = "#4a9263" if latest_raw >= 0 else "#9f5757"
-    label = f"vs QQQ {latest * 100:+.2f}% · top{n} {latest_raw * 100:+.2f}%"
-    dates = f"{rows[0]['signal_date']} → {rows[-1]['signal_date']}"
-    title = f"cumulative top{n} vs QQQ, next-session open→close"
-    title_y = 16 if compact else 18
-
-    return f"""<svg class="alpha-svg" viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(title)}">
-  <line x1="{left}" y1="{zero:.1f}" x2="{width - right}" y2="{zero:.1f}" class="axis-zero"/>
-  <line x1="{left}" y1="{top}" x2="{left}" y2="{height - bottom}" class="axis"/>
-  <polyline points="{raw_points}" fill="none" stroke="{raw_color}" stroke-width="1.5" stroke-dasharray="5 5" opacity="0.78" vector-effect="non-scaling-stroke"/>
-  <polyline points="{primary_points}" fill="none" stroke="{color}" stroke-width="2.2" vector-effect="non-scaling-stroke"/>
-  <circle cx="{latest_x:.1f}" cy="{latest_y:.1f}" r="3.5" fill="{color}"/>
-  <text x="{left}" y="{title_y}" class="chart-title">{html.escape(title)}</text>
-  <text x="{width - right}" y="{title_y}" text-anchor="end" class="chart-label">{html.escape(label)}</text>
-  <line x1="{left}" y1="{height - 24}" x2="{left + 22}" y2="{height - 24}" stroke="{color}" stroke-width="2.2"/>
-  <text x="{left + 30}" y="{height - 20}" class="chart-dim">vs QQQ</text>
-  <line x1="{left + 120}" y1="{height - 24}" x2="{left + 142}" y2="{height - 24}" stroke="{raw_color}" stroke-width="1.5" stroke-dasharray="5 5"/>
-  <text x="{left + 150}" y="{height - 20}" class="chart-dim">top{n} (unhedged)</text>
-  <text x="{left}" y="{height - 10}" class="chart-dim">{html.escape(dates)}</text>
-  <text x="{width - right}" y="{height - 10}" text-anchor="end" class="chart-dim">{len(rows)} benchmark days</text>
+    model_points = " ".join(f"{x_at(i):.1f},{y_at(v):.1f}" for i, v in enumerate(model_values))
+    qqq_points = " ".join(f"{x_at(i):.1f},{y_at(v):.1f}" for i, v in enumerate(qqq_values))
+    latest_model = model_values[-1]
+    latest_excess = rows[-1]["cum_top_vs_qqq"]
+    color_var = "var(--up)" if latest_model >= 0 else "var(--down)"
+    zero_y = y_at(0.0)
+    grid_values = [lo + (hi - lo) * i / 4 for i in range(5)]
+    grid = []
+    for v in grid_values:
+        y = y_at(v)
+        cls = "zero-line" if abs(v) < (hi - lo) / 1000 else "grid"
+        grid.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" class="{cls}"/>')
+        grid.append(f'<text x="{left}" y="{y - 4:.1f}" text-anchor="start">{v * 100:+.1f}%</text>')
+    if all(abs(v) >= (hi - lo) / 1000 for v in grid_values):
+        grid.append(f'<line x1="{left}" y1="{zero_y:.1f}" x2="{width - right}" y2="{zero_y:.1f}" class="zero-line"/>')
+    baseline_y = y_at(lo)
+    label_x = min(width - 4, x_at(len(model_values) - 1) + 8)
+    # direct labels sit at each line's end; push them apart when the lines
+    # converge so the two words never overprint
+    model_label_y = y_at(latest_model) + 4
+    qqq_label_y = y_at(qqq_values[-1]) + 4
+    if abs(model_label_y - qqq_label_y) < 14:
+        if model_label_y <= qqq_label_y:
+            qqq_label_y = model_label_y + 14
+        else:
+            qqq_label_y = model_label_y - 14
+    aria = (
+        f"cumulative top-{n} basket {fmt_signed_pct(latest_model)} and "
+        f"cumulative excess versus QQQ {fmt_signed_pct(latest_excess)}"
+    )
+    return f"""<svg class="alpha-svg" viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(aria)}" style="--chart-models: {color_var}">
+  {"".join(grid)}
+  <line x1="{left}" y1="{baseline_y:.1f}" x2="{width - right}" y2="{baseline_y:.1f}" class="baseline"/>
+  <polyline points="{qqq_points}" fill="none" class="qqq-line"/>
+  <polyline points="{model_points}" fill="none" class="models-line"/>
+  <text x="{label_x:.1f}" y="{model_label_y:.1f}" class="direct-label models-label">models</text>
+  <text x="{label_x:.1f}" y="{qqq_label_y:.1f}" class="direct-label">QQQ</text>
 </svg>"""
 
 
@@ -1091,35 +1129,42 @@ def provider_cell(row: dict, provider: str) -> str:
     return f'{bull}<span class="{cls}">/{bear}</span>'
 
 
-def render_first_sightings(rows: list[dict], providers: list[str]) -> str:
+def render_first_sightings(rows: list[dict], providers: list[str],
+                           compact: bool = False) -> str:
     if not rows:
         return '<pre class="tbl">  (no first sightings yet)</pre>'
     providers = providers or []
     lines = [
         '<div class="scroll"><table class="data-table provider-table">',
         "<thead><tr>",
-        "<th>ticker</th><th>first_seen</th><th>last_seen</th>",
+        "<th>ticker</th><th>first seen</th>" if compact
+        else "<th>ticker</th><th>first seen</th><th>last seen</th>",
     ]
     lines.extend(f"<th>{render_provider_heading(p)}</th>" for p in providers)
-    lines.append("<th>net</th><th>n</th><th>days</th></tr></thead><tbody>")
+    lines.append("<th>net</th></tr></thead><tbody>" if compact
+                 else "<th>net</th><th>n</th><th>days</th></tr></thead><tbody>")
     for r in rows:
         net = r.get("net_since") or 0
         sign = "+" if net > 0 else ("-" if net < 0 else " ")
+        first_seen = r["first_seen"][5:] if compact else r["first_seen"]
         lines.append("<tr>")
         lines.append(f"<td>${html.escape(r['ticker'])}</td>")
-        lines.append(f"<td>{html.escape(r['first_seen'])}</td>")
-        lines.append(f"<td>{html.escape(r.get('last_seen') or '-')}</td>")
+        lines.append(f"<td>{html.escape(first_seen)}</td>")
+        if not compact:
+            lines.append(f"<td>{html.escape(r.get('last_seen') or '-')}</td>")
         for provider in providers:
             lines.append(f"<td class=\"num\">{provider_cell(r, provider)}</td>")
         lines.append(f"<td class=\"num\">{sign}{abs(net)}</td>")
-        lines.append(f"<td class=\"num\">{r.get('n') or 0}</td>")
-        lines.append(f"<td class=\"num\">{r.get('days_seen') or 0}</td>")
+        if not compact:
+            lines.append(f"<td class=\"num\">{r.get('n') or 0}</td>")
+            lines.append(f"<td class=\"num\">{r.get('days_seen') or 0}</td>")
         lines.append("</tr>")
     lines.append("</tbody></table></div>")
     return "".join(lines)
 
 
-def render_consensus(rows: list[dict], providers: list[str]) -> str:
+def render_consensus(rows: list[dict], providers: list[str],
+                     compact: bool = False) -> str:
     if not rows:
         return '<pre class="tbl">  (no tickers yet where multiple providers were bullish)</pre>'
     n_days = max((r.get("spark_days") or 0 for r in rows), default=0)
@@ -1132,6 +1177,7 @@ def render_consensus(rows: list[dict], providers: list[str]) -> str:
     ]
     lines.extend(f"<th>{render_provider_heading(p)}</th>" for p in providers)
     lines.append(
+        "<th>total</th><th>verdict</th></tr></thead><tbody>" if compact else
         f"<th>total</th><th>verdict</th><th>{html.escape(spark_header)}</th>"
         "</tr></thead><tbody>"
     )
@@ -1151,7 +1197,8 @@ def render_consensus(rows: list[dict], providers: list[str]) -> str:
             lines.append(f"<td class=\"num\">{provider_cell(r, provider)}</td>")
         lines.append(f"<td class=\"num\">{total_bull-total_bear:+}</td>")
         lines.append(f"<td>{html.escape(verdict)}</td>")
-        lines.append(f"<td>{html.escape(spark)}</td>")
+        if not compact:
+            lines.append(f"<td class=\"spark\">{html.escape(spark)}</td>")
         lines.append("</tr>")
     lines.append("</tbody></table></div>")
     return "".join(lines)
@@ -1196,744 +1243,285 @@ def render_overview(d: dict) -> str:
 # ───────────────────────── html template ─────────────────────────
 
 
-HTML_TMPL = """<!doctype html>
+
+BASE_CSS = """/* BASE_CSS */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('assets/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('assets/fonts/JetBrainsMono-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+:root {
+  color-scheme: light;
+  --paper: oklch(0.96 0.008 90);
+  --ink: oklch(0.24 0.012 90);
+  --dim: oklch(0.47 0.012 90);
+  --faint: oklch(0.87 0.008 90);
+  --accent: oklch(0.60 0.12 70);
+  --up: oklch(0.48 0.10 245);
+  --down: oklch(0.48 0.13 20);
+  --spark: oklch(0.70 0.010 90);
+  --lh: 1.5rem;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --paper: oklch(0.19 0.008 90);
+    --ink: oklch(0.89 0.010 90);
+    --dim: oklch(0.68 0.010 90);
+    --faint: oklch(0.30 0.008 90);
+    --accent: oklch(0.66 0.09 70);
+    --up: oklch(0.68 0.08 245);
+    --down: oklch(0.68 0.10 20);
+    --spark: oklch(0.45 0.010 90);
+  }
+}
+* { box-sizing: border-box; }
+html { background: var(--paper); color: var(--ink); font-variant-numeric: tabular-nums lining-nums; }
+body {
+  margin: 0 auto;
+  padding: calc(var(--lh) * 2) 2ch calc(var(--lh) * 3);
+  max-width: 100ch;
+  max-width: calc(min(100ch, round(down, 100%, 1ch)));
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: var(--lh);
+}
+::selection { background: var(--accent); color: var(--paper); }
+a { color: var(--accent); text-decoration: none; text-underline-offset: 0.25em; }
+a:hover { text-decoration: underline; }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 0.25rem; }
+header, nav, main, section, footer, pre, table, p, h1, h2, h3 { margin: 0; }
+pre { white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; font: inherit; }
+pre.tbl { white-space: pre; overflow-wrap: normal; }
+section { margin-top: calc(var(--lh) * 3); padding-top: calc(var(--lh) * 0.5); border-top: 2px solid var(--accent); }
+h1, .wordmark { font-size: 21px; line-height: var(--lh); font-weight: 700; letter-spacing: 0; }
+h2 { font-size: 21px; line-height: var(--lh); font-weight: 700; letter-spacing: 0; }
+h3 { margin-top: calc(var(--lh) * 1.5); font-size: 14px; line-height: var(--lh); font-weight: 700; }
+.label, th, .stamp, .source, .meta-line, .nav, summary, .chart-title {
+  font-size: 12px;
+  line-height: var(--lh);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.dim, .intro, .source, .meta-line, .caption, .chart-dim { color: var(--dim); }
+.masthead { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 4ch; padding-bottom: var(--lh); border-bottom: 1px solid var(--faint); }
+.dek { margin-top: var(--lh); max-width: 72ch; color: var(--dim); }
+.stamp { text-align: right; color: var(--dim); }
+.stamp strong { color: var(--accent); font-weight: 700; }
+.nav { display: flex; flex-wrap: wrap; gap: 0 2ch; align-items: center; margin-top: var(--lh); padding: calc(var(--lh) * 0.5) 0; border-top: 1px solid var(--faint); border-bottom: 1px solid var(--faint); }
+.nav a { color: var(--accent); }
+.day-nav { display: grid; grid-template-columns: 3ch minmax(0, 1fr) 3ch; gap: 1ch; align-items: center; }
+.day-nav a, .day-nav span { display: inline-block; }
+.day-nav .day-strip { display: flex; justify-content: center; gap: 1ch; min-width: 0; overflow: hidden; white-space: nowrap; }
+.day-nav .day-current { color: var(--accent); font-weight: 700; }
+.day-nav .dim { color: var(--dim); }
+.flow-table, .data-table, .alpha-table { width: 100%; border-collapse: collapse; font: inherit; }
+th { color: var(--ink); font-weight: 700; border-bottom: 1px solid var(--faint); }
+th, td { padding: calc(var(--lh) * 0.5) 1ch calc(var(--lh) * 0.5) 0; vertical-align: top; border-bottom: 1px solid var(--faint); text-align: left; white-space: nowrap; }
+td.num, th.num { text-align: right; }
+.flow-table .ticker { font-weight: 700; }
+.flow-table .bar { width: 30ch; font-weight: 700; white-space: nowrap; }
+.spark { color: var(--spark); white-space: nowrap; }
+.up { color: var(--up); }
+.down { color: var(--down); }
+.zero { color: var(--dim); }
+.insight { margin-top: var(--lh); max-width: 72ch; }
+.scoreboard { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.6fr); gap: 4ch; align-items: end; }
+.stat-num { font-size: 21px; line-height: var(--lh); font-weight: 700; }
+.stat-rest { margin-top: calc(var(--lh) * 0.5); max-width: 44ch; color: var(--dim); }
+.source { margin-top: var(--lh); color: var(--dim); }
+.teaser-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4ch; }
+.scroll { overflow-x: auto; max-width: 100%; }
+.more { margin-top: var(--lh); color: var(--dim); }
+.provider-head { display: inline-flex; width: 4ch; align-items: center; justify-content: center; vertical-align: middle; }
+.provider-icon { width: 16px; height: 16px; display: block; opacity: 0.95; filter: sepia(12%) saturate(220%) hue-rotate(5deg) brightness(42%); }
+.provider-head, .provider-icon { color: var(--ink); fill: currentColor; }
+.provider-icon path { fill: currentColor; }
+.bear { color: var(--dim); }
+.bear-zero { color: var(--faint); }
+.pipeline { display: flex; flex-wrap: wrap; gap: 1ch; align-items: center; }
+.pipeline-square { display: inline-flex; width: 1.5ch; height: var(--lh); align-items: center; justify-content: center; color: var(--dim); text-decoration: none; }
+.pipeline-square.clean { color: var(--ink); }
+.pipeline-square.excluded { color: var(--dim); }
+.pipeline-square.missed { color: var(--faint); }
+details { margin-top: calc(var(--lh) * 2); padding-top: calc(var(--lh) * 0.5); border-top: 1px solid var(--faint); }
+summary { color: var(--accent); cursor: pointer; list-style: none; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: '+ '; }
+details[open] summary::before { content: '- '; }
+details .details-body { margin-top: var(--lh); max-width: 72ch; color: var(--dim); }
+.alpha-svg { width: 100%; height: auto; display: block; }
+.alpha-svg text { font: 12px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; fill: var(--dim); }
+.alpha-svg .grid { stroke: var(--faint); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.alpha-svg .baseline { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.alpha-svg .zero-line { stroke: var(--dim); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.alpha-svg .models-line { stroke: var(--chart-models, var(--up)); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.alpha-svg .qqq-line { stroke: var(--dim); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+.alpha-svg .direct-label { font-weight: 700; fill: var(--ink); }
+.alpha-svg .models-label { fill: var(--chart-models, var(--up)); }
+footer { margin-top: calc(var(--lh) * 4); padding-top: var(--lh); border-top: 1px solid var(--faint); color: var(--dim); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (prefers-color-scheme: dark) {
+  .provider-icon { color: var(--ink); filter: invert(94%) sepia(8%) saturate(120%) hue-rotate(5deg) brightness(94%); }
+}
+@media (max-width: 60ch) {
+  body { padding-left: 1ch; padding-right: 1ch; }
+  .masthead { grid-template-columns: 1fr; gap: var(--lh); }
+  .stamp { text-align: left; }
+  .scoreboard, .teaser-grid { grid-template-columns: minmax(0, 1fr); }
+  .flow-table .spark-col, .flow-table .spark { display: none; }
+  .flow-table .bar { width: 18ch; }
+  th, td { padding-right: 0.5ch; }
+}
+"""
+
+PAGE_TMPL = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>pythia — {current_day}</title>
+<title>{title}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="{description}">
+<meta property="og:title" content="{og_title}">
+<meta property="og:description" content="{description}">
+<meta property="og:site_name" content="pythia">
+<meta name="theme-color" content="oklch(0.96 0.008 90)">
+<link rel="icon" type="image/svg+xml" href="{root_prefix}assets/favicon.svg">
 <style>
-  :root {{
-    --bg: #0a0a0a;
-    --fg: #e6e4dd;
-    --dim: #7a766b;
-    --accent: #6ad08a;
-    --accent-dim: #4a9263;
-    --warn: #e6a93c;
-    --err: #e36a6a;
-    --hair: #1a1a1a;
-  }}
-  html, body {{ background: var(--bg); color: var(--fg); margin: 0; padding: 0; }}
-  body {{
-    font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace,
-                 SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 13.5px;
-    line-height: 1.62;
-    padding: 40px 24px 80px;
-    max-width: 920px;
-    margin: 0 auto;
-  }}
-  header {{ margin-bottom: 6px; }}
-  h1 {{
-    font-size: 13.5px;
-    margin: 0;
-    letter-spacing: 2px;
-    font-weight: 700;
-    color: var(--fg);
-  }}
-  .tag {{ color: var(--dim); }}
-  .meta-top {{ color: var(--dim); font-size: 12px; margin-top: 6px; }}
-  pre {{ margin: 0; white-space: pre-wrap; word-break: keep-all; }}
-  pre.tbl {{ white-space: pre; }}
-  section {{ margin-top: 36px; }}
-  h2 {{
-    font-size: 13.5px;
-    color: var(--accent);
-    letter-spacing: 1px;
-    font-weight: 700;
-    margin: 0 0 12px 0;
-  }}
-  h3 {{
-    font-size: 13.5px;
-    color: var(--accent-dim);
-    font-weight: 700;
-    margin: 26px 0 8px 0;
-  }}
-  .intro {{ color: var(--dim); margin: 0 0 14px 0; }}
-  .scroll {{ overflow-x: auto; }}
-  nav {{
-    margin-top: 14px;
-    color: var(--dim);
-    border-top: 1px dashed var(--hair);
-    border-bottom: 1px dashed var(--hair);
-    padding: 8px 0;
-  }}
-  nav a {{ color: var(--dim); margin-right: 14px; text-decoration: none; }}
-  nav a:hover {{ color: var(--accent); }}
-  nav.day-nav {{
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 14px;
-    margin-top: 14px;
-    padding: 10px 0;
-    border-top: 1px dashed var(--hair);
-    border-bottom: 1px dashed var(--hair);
-  }}
-  nav.day-nav a {{ margin-right: 0; }}
-  nav.day-nav .day-strip {{
-    flex: 1;
-    text-align: center;
-    letter-spacing: 0.5px;
-    white-space: nowrap;
-    overflow-x: auto;
-  }}
-  nav.day-nav .day-strip a {{ margin: 0 8px; }}
-  nav.day-nav .day-strip .day-current {{
-    color: var(--accent);
-    font-weight: 700;
-    letter-spacing: 1px;
-    margin: 0 8px;
-  }}
-  nav.day-nav .dim {{ color: var(--hair); }}
-  .hero-chart {{
-    margin: 28px 0 18px;
-    padding: 22px 0;
-    border-top: 2px solid var(--accent);
-    border-bottom: 2px solid var(--accent);
-  }}
-  .hero-chart .label {{
-    color: var(--accent);
-    font-weight: 700;
-    letter-spacing: 2px;
-    margin-bottom: 6px;
-    text-align: center;
-  }}
-  .hero-chart pre {{
-    font-size: 14px;
-    line-height: 1.55;
-    white-space: pre;
-    overflow-x: auto;
-  }}
-  .caption {{
-    color: var(--dim);
-    margin: 18px 0 30px;
-    line-height: 1.6;
-  }}
-  .meta {{
-    color: var(--dim);
-    margin-top: 56px;
-    padding-top: 20px;
-    border-top: 1px dashed var(--hair);
-    font-size: 12px;
-  }}
-  ::selection {{ background: var(--accent); color: var(--bg); }}
+{base_css}
 </style>
 </head>
 <body>
-
-<header>
-  <h1>PYTHIA</h1>
-  <div class="tag">// {tagline}</div>
-  <div class="meta-top">rendered {rendered} · panel_version {panel_version}</div>
-</header>
-
+{masthead}
+{nav}
 {day_nav}
-
-<section class="hero-chart">
-  <div class="label">NET AI RECOMMENDATION FLOW · {current_day}</div>
-  <div class="scroll"><pre>{hero_chart}</pre></div>
-</section>
-
-<div class="caption">{caption}</div>
-
-<nav>
-  <a href="#findings">details</a>
-  <a href="#samples">see for yourself</a>
-  <a href="#why">why</a>
-  <a href="#how">how it works</a>
-  <a href="#ops">operational</a>
-  <a href="{root_prefix}trends.html">▸ trends</a>
-  <a href="{root_prefix}alpha.html">▸ alpha</a>
-  <a href="{root_prefix}prompts.html">▸ prompts</a>
-</nav>
-
-<section id="findings">
-  <h2>▸ details</h2>
-  <pre class="intro">{intro_findings}</pre>
-
-  <h3>full breakdown — bull / bear / neut / ctx per ticker</h3>
-  <pre class="intro">{intro_top_mentions}</pre>
-  <div class="scroll"><pre class="tbl">{top_mentions}</pre></div>
-
-  <h3>does it matter who's asking?</h3>
-  <pre class="intro">{intro_persona_delta}</pre>
-  <div class="scroll"><pre class="tbl">{persona_delta}</pre></div>
-</section>
-
-<section id="samples">
-  <h2>▸ see for yourself</h2>
-  <pre class="intro">{intro_samples}</pre>
-  <div class="scroll"><pre>{samples}</pre></div>
-</section>
-
-<section id="why">
-  <h2>▸ why this exists</h2>
-  <pre>{why}</pre>
-</section>
-
-<section id="how">
-  <h2>▸ how this works</h2>
-
-  <h3>the 10 questions</h3>
-  <pre class="intro">{intro_prompts}</pre>
-  <div class="scroll"><pre>{prompts}</pre></div>
-
-  <h3>the 2 personas</h3>
-  <pre class="intro">{intro_personas}</pre>
-  <div class="scroll"><pre>{personas}</pre></div>
-
-  <h3>configured model surfaces</h3>
-  <pre class="intro">{intro_models}</pre>
-  <div class="scroll"><pre class="tbl">{model_configs}</pre></div>
-</section>
-
-<section id="ops">
-  <h2>▸ operational</h2>
-
-  <h3>overview</h3>
-  <pre class="tbl">{overview}</pre>
-
-  <h3>recent runs</h3>
-  <div class="scroll"><pre class="tbl">{runs}</pre></div>
-</section>
-
-<div class="meta"><pre>{footer}</pre>
-  <pre>  rebuilt from {db_rel} · sources at {root}</pre>
-</div>
-
+<main>
+{content}
+</main>
+{footer}
 </body>
 </html>
 """
 
-
-HTML_INDEX_TMPL = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>pythia — {current_day}</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-  :root {{
-    --bg: #0a0a0a; --fg: #e6e4dd; --dim: #7a766b;
-    --accent: #6ad08a; --accent-dim: #4a9263; --hair: #1a1a1a;
-  }}
-  html, body {{ background: var(--bg); color: var(--fg); margin: 0; padding: 0; }}
-  body {{
-    font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace,
-                 SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 13.5px; line-height: 1.62;
-    padding: 40px 24px 80px; max-width: 1000px; margin: 0 auto;
-  }}
-  header {{ margin-bottom: 6px; }}
-  h1 {{ font-size: 13.5px; margin: 0; letter-spacing: 2px; font-weight: 700; }}
-  .tag {{ color: var(--dim); }}
-  .meta-top {{ color: var(--dim); font-size: 12px; margin-top: 6px; }}
-  pre {{ margin: 0; white-space: pre-wrap; word-break: keep-all; }}
-  pre.tbl {{ white-space: pre; }}
-  section {{ margin-top: 40px; }}
-  h2 {{
-    font-size: 13.5px; color: var(--accent); letter-spacing: 1px;
-    font-weight: 700; margin: 0 0 12px 0;
-  }}
-  .intro {{ color: var(--dim); margin: 0 0 14px 0; }}
-  .more {{ color: var(--dim); margin-top: 10px; font-size: 12.5px; }}
-  .more a {{ color: var(--accent-dim); text-decoration: none; }}
-  .more a:hover {{ color: var(--accent); }}
-  nav.day-nav {{
-    display: flex; justify-content: space-between; align-items: center; gap: 14px;
-    margin-top: 14px; padding: 10px 0;
-    border-top: 1px dashed var(--hair); border-bottom: 1px dashed var(--hair);
-  }}
-  nav.day-nav a {{ color: var(--dim); margin-right: 0; text-decoration: none; }}
-  nav.day-nav a:hover {{ color: var(--accent); }}
-  nav.day-nav .day-strip {{
-    flex: 1; text-align: center; letter-spacing: 0.5px;
-    white-space: nowrap; overflow-x: auto;
-  }}
-  nav.day-nav .day-strip a {{ margin: 0 8px; }}
-  nav.day-nav .day-strip .day-current {{
-    color: var(--accent); font-weight: 700; letter-spacing: 1px; margin: 0 8px;
-  }}
-  nav.day-nav .dim {{ color: var(--hair); }}
-  nav.sections {{
-    color: var(--dim); margin-top: 28px; padding: 8px 0;
-    border-top: 1px dashed var(--hair); border-bottom: 1px dashed var(--hair);
-  }}
-  nav.sections a {{ color: var(--dim); margin-right: 14px; text-decoration: none; }}
-  nav.sections a:hover {{ color: var(--accent); }}
-  .hero-chart {{
-    margin: 28px 0 18px;
-    padding: 22px 0;
-    border-top: 2px solid var(--accent);
-    border-bottom: 2px solid var(--accent);
-  }}
-  .hero-chart .label {{
-    color: var(--accent); font-weight: 700; letter-spacing: 2px;
-    margin-bottom: 6px; text-align: center;
-  }}
-  .hero-chart pre {{
-    font-size: 14px; line-height: 1.55; white-space: pre; overflow-x: auto;
-  }}
-  .alpha-brief {{
-    margin: 26px 0 12px;
-    padding: 14px 0 12px;
-    border-top: 1px dashed var(--hair);
-    border-bottom: 1px dashed var(--hair);
-  }}
-  .alpha-brief .label {{
-    color: var(--accent); font-weight: 700; letter-spacing: 1px; margin-bottom: 8px;
-  }}
-  .alpha-brief .more {{ margin-top: 6px; }}
-  .alpha-svg {{ width: 100%; height: auto; display: block; }}
-  .alpha-svg .axis {{ stroke: var(--hair); stroke-width: 1; }}
-  .alpha-svg .axis-zero {{ stroke: var(--dim); stroke-width: 1; stroke-dasharray: 3 5; opacity: 0.75; }}
-  .alpha-svg text {{ font: 12px 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace, monospace; }}
-  .alpha-svg .chart-title {{ fill: var(--fg); }}
-  .alpha-svg .chart-label {{ fill: var(--accent); font-weight: 700; }}
-  .alpha-svg .chart-dim {{ fill: var(--dim); }}
-  details.explainer {{
-    margin: 12px 0 28px;
-    padding: 10px 14px;
-    border: 1px dashed var(--hair);
-  }}
-  details.explainer > summary {{
-    color: var(--dim); cursor: pointer; outline: none;
-    list-style: none;
-  }}
-  details.explainer > summary::-webkit-details-marker {{ display: none; }}
-  details.explainer > summary::before {{
-    content: "▸ "; color: var(--accent-dim);
-  }}
-  details.explainer[open] > summary::before {{
-    content: "▾ "; color: var(--accent);
-  }}
-  details.explainer > pre {{
-    margin-top: 12px; line-height: 1.6;
-  }}
-  .scroll {{ overflow-x: auto; }}
-  .data-table {{
-    border-collapse: collapse; font: inherit; color: var(--fg);
-  }}
-  .data-table th, .data-table td {{
-    padding: 0 18px 0 0; text-align: left; white-space: nowrap;
-  }}
-  .data-table th {{
-    color: var(--dim); font-weight: 700;
-    border-bottom: 1px dashed var(--dim);
-  }}
-  .data-table .num {{ text-align: right; }}
-  .data-table .bear {{ color: var(--dim); }}
-  .data-table .bear-zero {{ color: var(--hair); }}
-  .provider-head {{
-    display: inline-flex; width: 42px; align-items: center; justify-content: center;
-    vertical-align: middle;
-  }}
-  .provider-icon {{
-    width: 16px; height: 16px; display: block; opacity: 0.9;
-    filter: invert(92%) sepia(9%) saturate(225%) hue-rotate(3deg) brightness(102%) contrast(90%);
-  }}
-  .sr-only {{
-    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
-  }}
-  .meta {{
-    color: var(--dim); margin-top: 56px; padding-top: 20px;
-    border-top: 1px dashed var(--hair); font-size: 12px;
-  }}
-  .meta a {{ color: var(--accent-dim); text-decoration: none; }}
-  .meta a:hover {{ color: var(--accent); }}
-  ::selection {{ background: var(--accent); color: var(--bg); }}
-</style>
-</head>
-<body>
-
-<header>
-  <h1>PYTHIA</h1>
-  <div class="tag">// what frontier AI models tell people to buy</div>
-</header>
-
-{day_nav}
-
-<section class="alpha-brief">
-  <div class="label">ALPHA CHECK · cumulative top20 vs QQQ</div>
-  {alpha_chart}
-  <div class="more">{alpha_teaser} → <a href="alpha.html">full benchmark</a></div>
-</section>
-
-<section class="hero-chart">
-  <div class="label">NET AI RECOMMENDATION FLOW · {current_day}</div>
-  <div class="scroll"><pre>{hero_chart}</pre></div>
-</section>
-
-<details class="explainer">
-  <summary>what am I looking at?</summary>
-  <pre>{explainer}</pre>
-</details>
-
-<section id="new">
-  <h2>▸ first sightings</h2>
-  {first_sightings}
-  <div class="more">→ <a href="trends.html#first-sightings">full list</a></div>
-</section>
-
-<section id="consensus">
-  <h2>▸ provider consensus</h2>
-  {consensus}
-  <div class="more">→ <a href="trends.html#consensus">full table</a></div>
-</section>
-
-<section id="rolling7">
-  <h2>▸ top picks · last 7 days</h2>
-  <div class="scroll"><pre class="tbl">{rolling_7d}</pre></div>
-  <div class="more">→ <a href="trends.html">30d + all-time on trends</a></div>
-</section>
-
-<div class="meta">
-  <pre>  detail per day  → <a href="day/{current_day}.html">today's deep view</a>  ·  <a href="trends.html">trends</a>  ·  <a href="alpha.html">alpha</a>  ·  <a href="prompts.html">methodology</a></pre>
-  <pre>  {n_clean_days} clean days · {n_total_responses} responses · rendered {rendered}</pre>
-  <pre>{footer}</pre>
-</div>
-
-</body>
-</html>
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<rect width="64" height="64" fill="oklch(0.96 0.008 90)"/>
+<path d="M14 50V14h21c9 0 15 5 15 14s-6 14-15 14H26v8H14Zm12-19h8c3 0 5-1 5-3s-2-3-5-3h-8v6Z" fill="oklch(0.60 0.12 70)"/>
+</svg>
 """
 
-
-HTML_TRENDS_TMPL = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>pythia — trends</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-  :root {{
-    --bg: #0a0a0a; --fg: #e6e4dd; --dim: #7a766b;
-    --accent: #6ad08a; --accent-dim: #4a9263; --hair: #1a1a1a;
-  }}
-  html, body {{ background: var(--bg); color: var(--fg); margin: 0; padding: 0; }}
-  body {{
-    font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace,
-                 SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 13.5px; line-height: 1.62;
-    padding: 40px 24px 80px; max-width: 1000px; margin: 0 auto;
-  }}
-  header {{ margin-bottom: 6px; }}
-  h1 {{ font-size: 13.5px; margin: 0; letter-spacing: 2px; font-weight: 700; }}
-  .tag {{ color: var(--dim); }}
-  .meta-top {{ color: var(--dim); font-size: 12px; margin-top: 6px; }}
-  pre {{ margin: 0; white-space: pre-wrap; word-break: keep-all; }}
-  pre.tbl {{ white-space: pre; }}
-  section {{ margin-top: 36px; }}
-  h2 {{
-    font-size: 13.5px; color: var(--accent); letter-spacing: 1px;
-    font-weight: 700; margin: 0 0 12px 0;
-  }}
-  h3 {{
-    font-size: 13.5px; color: var(--accent-dim); font-weight: 700;
-    margin: 26px 0 8px 0;
-  }}
-  .intro {{ color: var(--dim); margin: 0 0 14px 0; }}
-  nav {{
-    margin-top: 14px; color: var(--dim);
-    border-top: 1px dashed var(--hair); border-bottom: 1px dashed var(--hair);
-    padding: 8px 0;
-  }}
-  nav a {{ color: var(--dim); margin-right: 14px; text-decoration: none; }}
-  nav a:hover {{ color: var(--accent); }}
-  .scroll {{ overflow-x: auto; }}
-  .data-table {{
-    border-collapse: collapse; font: inherit; color: var(--fg);
-  }}
-  .data-table th, .data-table td {{
-    padding: 0 18px 0 0; text-align: left; white-space: nowrap;
-  }}
-  .data-table th {{
-    color: var(--dim); font-weight: 700;
-    border-bottom: 1px dashed var(--dim);
-  }}
-  .data-table .num {{ text-align: right; }}
-  .data-table .bear {{ color: var(--dim); }}
-  .data-table .bear-zero {{ color: var(--hair); }}
-  .provider-head {{
-    display: inline-flex; width: 42px; align-items: center; justify-content: center;
-    vertical-align: middle;
-  }}
-  .provider-icon {{
-    width: 16px; height: 16px; display: block; opacity: 0.9;
-    filter: invert(92%) sepia(9%) saturate(225%) hue-rotate(3deg) brightness(102%) contrast(90%);
-  }}
-  .sr-only {{
-    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
-  }}
-  .meta {{
-    color: var(--dim); margin-top: 56px; padding-top: 20px;
-    border-top: 1px dashed var(--hair); font-size: 12px;
-  }}
-  ::selection {{ background: var(--accent); color: var(--bg); }}
-</style>
-</head>
-<body>
-
-<header>
-  <h1>PYTHIA / trends</h1>
-  <div class="tag">// rolling and cumulative views across all clean days</div>
-  <div class="meta-top">rendered {rendered} · {n_days} clean days · {n_responses} responses</div>
-</header>
-
-<nav>
-  <a href="index.html">← back to dashboard</a>
-  <a href="#rolling7">last 7 days</a>
-  <a href="#rolling30">last 30 days</a>
-  <a href="#alltime">all-time</a>
-  <a href="#first-sightings">first sightings</a>
-  <a href="#consensus">consensus</a>
-  <a href="#days">all days</a>
-  <a href="alpha.html">▸ alpha</a>
-  <a href="prompts.html">▸ prompts</a>
-</nav>
-
-<section id="rolling7">
-  <h2>▸ top tickers · last 7 days</h2>
-  <pre class="intro">{intro_rolling}</pre>
-  <div class="scroll"><pre class="tbl">{rolling_7d}</pre></div>
-</section>
-
-<section id="rolling30">
-  <h2>▸ top tickers · last 30 days</h2>
-  <div class="scroll"><pre class="tbl">{rolling_30d}</pre></div>
-</section>
-
-<section id="alltime">
-  <h2>▸ top tickers · all-time</h2>
-  <div class="scroll"><pre class="tbl">{rolling_all}</pre></div>
-</section>
-
-<section id="first-sightings">
-  <h2>▸ first sightings</h2>
-  <pre class="intro">{intro_first_sightings}</pre>
-  {first_sightings}
-</section>
-
-<section id="consensus">
-  <h2>▸ provider consensus</h2>
-  <pre class="intro">{intro_consensus}</pre>
-  {consensus}
-</section>
-
-<section id="days">
-  <h2>▸ all clean days</h2>
-  <pre class="intro">{intro_days}</pre>
-  <div class="scroll"><pre class="tbl">{days_index}</pre></div>
-</section>
-
-<div class="meta"><pre>{footer}</pre></div>
-
-</body>
-</html>
-"""
+DESCRIPTIONS = {
+    "index": "nightly AI recommendation flow, scoreboard, first sightings, and consensus.",
+    "day": "full nightly pythia panel artifact with ticker flow, model samples, and prompts.",
+    "trends": "rolling pythia recommendation flow, first sightings, and provider consensus.",
+    "alpha": "pythia paper scoreboard comparing the top-20 basket with QQQ.",
+    "prompts": "pythia methodology, prompts, personas, and model surfaces.",
+}
 
 
-HTML_ALPHA_TMPL = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>pythia — alpha</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-  :root {{
-    --bg: #0a0a0a; --fg: #e6e4dd; --dim: #7a766b;
-    --accent: #6ad08a; --accent-dim: #4a9263; --hair: #1a1a1a;
-  }}
-  html, body {{ background: var(--bg); color: var(--fg); margin: 0; padding: 0; }}
-  body {{
-    font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace,
-                 SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 13.5px; line-height: 1.62;
-    padding: 40px 24px 80px; max-width: 1000px; margin: 0 auto;
-  }}
-  header {{ margin-bottom: 6px; }}
-  h1 {{ font-size: 13.5px; margin: 0; letter-spacing: 2px; font-weight: 700; }}
-  .tag {{ color: var(--dim); }}
-  .meta-top {{ color: var(--dim); font-size: 12px; margin-top: 6px; }}
-  pre {{ margin: 0; white-space: pre-wrap; word-break: keep-all; }}
-  pre.tbl {{ white-space: pre; }}
-  section {{ margin-top: 36px; }}
-  h2 {{
-    font-size: 13.5px; color: var(--accent); letter-spacing: 1px;
-    font-weight: 700; margin: 0 0 12px 0;
-  }}
-  .intro {{ color: var(--dim); margin: 0 0 14px 0; }}
-  nav {{
-    margin-top: 14px; color: var(--dim);
-    border-top: 1px dashed var(--hair); border-bottom: 1px dashed var(--hair);
-    padding: 8px 0;
-  }}
-  nav a {{ color: var(--dim); margin-right: 14px; text-decoration: none; }}
-  nav a:hover {{ color: var(--accent); }}
-  .chart-wrap {{
-    margin-top: 24px;
-    padding: 18px 0;
-    border-top: 2px solid var(--accent);
-    border-bottom: 2px solid var(--accent);
-  }}
-  .alpha-svg {{ width: 100%; height: auto; display: block; }}
-  .alpha-svg .axis {{ stroke: var(--hair); stroke-width: 1; }}
-  .alpha-svg .axis-zero {{ stroke: var(--dim); stroke-width: 1; stroke-dasharray: 3 5; opacity: 0.75; }}
-  .alpha-svg text {{ font: 12px 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace, monospace; }}
-  .alpha-svg .chart-title {{ fill: var(--fg); }}
-  .alpha-svg .chart-label {{ fill: var(--accent); font-weight: 700; }}
-  .alpha-svg .chart-dim {{ fill: var(--dim); }}
-  .scroll {{ overflow-x: auto; }}
-  .meta {{
-    color: var(--dim); margin-top: 56px; padding-top: 20px;
-    border-top: 1px dashed var(--hair); font-size: 12px;
-  }}
-  ::selection {{ background: var(--accent); color: var(--bg); }}
-</style>
-</head>
-<body>
-
-<header>
-  <h1>PYTHIA / alpha</h1>
-  <div class="tag">// paper benchmark: does recommendation intensity trade?</div>
-  <div class="meta-top">rendered {rendered}</div>
-</header>
-
-<nav>
-  <a href="index.html">← back to dashboard</a>
-  <a href="trends.html">trends</a>
-  <a href="prompts.html">methodology</a>
-</nav>
-
-<section class="chart-wrap">
-  {alpha_chart}
-</section>
-
-<section>
-  <h2>▸ benchmark definition</h2>
-  <pre class="intro">{definition}</pre>
-</section>
-
-<section>
-  <h2>▸ running averages</h2>
-  <div class="scroll"><pre class="tbl">{summary}</pre></div>
-</section>
-
-<section>
-  <h2>▸ daily rows</h2>
-  <div class="scroll"><pre class="tbl">{table}</pre></div>
-</section>
-
-<div class="meta"><pre>{footer}</pre></div>
-
-</body>
-</html>
-"""
+def page_shell(title: str, page: str, masthead: str, nav: str, day_nav: str,
+               content: str, footer: str, root_prefix: str = "") -> str:
+    desc = DESCRIPTIONS.get(page, DESCRIPTIONS["index"])
+    return PAGE_TMPL.format(
+        title=html.escape(title),
+        description=html.escape(desc),
+        og_title=html.escape(title),
+        root_prefix=html.escape(root_prefix),
+        base_css=BASE_CSS.replace("assets/", f"{root_prefix}assets/"),
+        masthead=masthead,
+        nav=nav,
+        day_nav=day_nav,
+        content=content,
+        footer=footer,
+    )
 
 
-HTML_PROMPTS_TMPL = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>pythia — prompts (review)</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-  :root {{
-    --bg: #0a0a0a;
-    --fg: #e6e4dd;
-    --dim: #7a766b;
-    --accent: #6ad08a;
-    --accent-dim: #4a9263;
-    --hair: #1a1a1a;
-  }}
-  html, body {{ background: var(--bg); color: var(--fg); margin: 0; padding: 0; }}
-  body {{
-    font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Code', ui-monospace,
-                 SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 13.5px;
-    line-height: 1.62;
-    padding: 40px 24px 80px;
-    max-width: 920px;
-    margin: 0 auto;
-  }}
-  header {{ margin-bottom: 6px; }}
-  h1 {{ font-size: 13.5px; margin: 0; letter-spacing: 2px; font-weight: 700; }}
-  .tag {{ color: var(--dim); }}
-  .meta-top {{ color: var(--dim); font-size: 12px; margin-top: 6px; }}
-  pre {{ margin: 0; white-space: pre-wrap; word-break: keep-all; }}
-  pre.tbl {{ white-space: pre; }}
-  section {{ margin-top: 36px; }}
-  h2 {{
-    font-size: 13.5px; color: var(--accent); letter-spacing: 1px;
-    font-weight: 700; margin: 0 0 12px 0;
-  }}
-  h3 {{
-    font-size: 13.5px; color: var(--accent-dim); font-weight: 700;
-    margin: 26px 0 8px 0;
-  }}
-  .intro {{ color: var(--dim); margin: 0 0 14px 0; }}
-  nav {{
-    margin-top: 14px; color: var(--dim);
-    border-top: 1px dashed var(--hair);
-    border-bottom: 1px dashed var(--hair);
-    padding: 8px 0;
-  }}
-  nav a {{ color: var(--dim); margin-right: 14px; text-decoration: none; }}
-  nav a:hover {{ color: var(--accent); }}
-  .meta {{
-    color: var(--dim); margin-top: 56px; padding-top: 20px;
-    border-top: 1px dashed var(--hair); font-size: 12px;
-  }}
-  ::selection {{ background: var(--accent); color: var(--bg); }}
-</style>
-</head>
-<body>
+def parse_dt(iso: str | None) -> datetime | None:
+    if not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
-<header>
-  <h1>PYTHIA / prompts</h1>
-  <div class="tag">// the exact text claude opus + gpt-5.5 see, every run</div>
-  <div class="meta-top">rendered {rendered}</div>
-</header>
 
-<nav>
-  <a href="index.html">← back to dashboard</a>
-</nav>
+def fmt_et(iso: str | None) -> str:
+    dt = parse_dt(iso)
+    if not dt:
+        return "time pending"
+    return dt.astimezone(ET).strftime("%Y-%m-%d %H:%M ET")
 
-<section>
-  <h2>▸ how a prompt is assembled</h2>
-  <pre class="intro">{assembly_intro}</pre>
-  <h3>example: portfolio_01 × speculator</h3>
-  <div class="scroll"><pre>{assembled_on}</pre></div>
-</section>
 
-<section>
-  <h2>▸ preamble  (applied to every prompt, after the persona)</h2>
-  <pre class="intro">{preamble_intro}</pre>
-  <div class="scroll"><pre>{preamble_block}</pre></div>
-</section>
+def stamp_block(d: dict, panel_no: int) -> str:
+    latest = d.get("latest_run")
+    counts = d.get("counts")
+    ok = counts["n_responses_ok"] if counts else 0
+    total = ok + (counts["n_responses_fail"] if counts else 0)
+    finished = latest["finished_at"] if latest else None
+    started = latest["started_at"] if latest else None
+    stamp_time = fmt_et(finished or started)
+    return (
+        '<div class="stamp">'
+        f'<div><strong>NIGHTLY PANEL No. {panel_no}</strong></div>'
+        f'<div>{html.escape(stamp_time)}</div>'
+        f'<div>{ok}/{total} responses</div>'
+        '</div>'
+    )
 
-<section>
-  <h2>▸ personas  (injected as &quot;about me&quot; context)</h2>
-  <pre class="intro">{personas_intro}</pre>
-  <div class="scroll"><pre>{personas_full}</pre></div>
-</section>
 
-<section>
-  <h2>▸ the 10 questions  (full text, no truncation)</h2>
-  <pre class="intro">{prompts_intro}</pre>
-  <div class="scroll"><pre>{prompts_full}</pre></div>
-</section>
+def render_masthead(d: dict, panel_no: int, page_name: str | None = None, compact: bool = False) -> str:
+    title = "PYTHIA" if not page_name else f"PYTHIA / {page_name}"
+    dek = (
+        "Every night we ask Claude, GPT-5.5 and Gemini what stocks to buy.<br>"
+        "We log every answer."
+    )
+    dek_html = "" if compact else f'<div class="dek">{dek}</div>'
+    return (
+        '<header class="masthead">'
+        f'<div><div class="wordmark">{html.escape(title)}</div>{dek_html}</div>'
+        f'{stamp_block(d, panel_no)}'
+        '</header>'
+    )
 
-<div class="meta"><pre>{footer}</pre></div>
 
-</body>
-</html>
-"""
+def render_main_nav(root_prefix: str = "") -> str:
+    links = [
+        ("index", "index.html"),
+        ("trends", "trends.html"),
+        ("scoreboard", "alpha.html"),
+        ("methodology", "prompts.html"),
+    ]
+    return '<nav class="nav">' + "".join(
+        f'<a href="{html.escape(root_prefix + href)}">{label}</a>'
+        for label, href in links
+    ) + "</nav>"
 
+
+def render_footer(root_prefix: str = "") -> str:
+    return (
+        '<footer>'
+        f'<a href="{html.escape(root_prefix)}prompts.html">methodology</a> · '
+        f'<a href="https://{html.escape(REPO_URL)}">raw data</a> · '
+        'not investment advice; a public measurement experiment'
+        '</footer>'
+    )
 
 # ───────────────────────── main ─────────────────────────
+
 
 
 def _day_href(day: str, is_index: bool) -> str:
@@ -1941,25 +1529,18 @@ def _day_href(day: str, is_index: bool) -> str:
 
 
 def render_day_nav(current: str, days: list[str], is_index: bool) -> str:
-    """Render the prev/strip/next nav. `days` is the full clean-day list in
-    DESC order (latest first). Shows up to STRIP_LEN days centered around
-    `current` as a clickable date strip, plus ◀ ▶ arrows on either end."""
-    STRIP_LEN = 10
+    """Render at most nine days, centered on the current day."""
+    strip_len = 9
     try:
         idx = days.index(current)
     except ValueError:
         idx = 0
-
-    # Surrounding window of visible days. days is DESC, so older = higher idx.
-    end = min(len(days), idx + STRIP_LEN // 2 + 1)
-    start = max(0, end - STRIP_LEN)
-    if end - start < STRIP_LEN:
-        end = min(len(days), start + STRIP_LEN)
-    visible = days[start:end]                  # still DESC
-    visible_asc = list(reversed(visible))      # ASC for display (older → newer)
+    start = max(0, idx - strip_len // 2)
+    end = min(len(days), start + strip_len)
+    start = max(0, end - strip_len)
+    visible_asc = list(reversed(days[start:end]))
 
     def short(d: str) -> str:
-        # YYYY-MM-DD → MM-DD
         return d[5:] if len(d) >= 10 else d
 
     def chip(d: str) -> str:
@@ -1967,10 +1548,8 @@ def render_day_nav(current: str, days: list[str], is_index: bool) -> str:
             return f'<span class="day-current">[{html.escape(short(d))}]</span>'
         return f'<a href="{html.escape(_day_href(d, is_index))}" title="{html.escape(d)}">{html.escape(short(d))}</a>'
 
-    strip = " ".join(chip(d) for d in visible_asc)
-
-    older = days[idx + 1] if idx + 1 < len(days) else None   # one step back in time
-    newer = days[idx - 1] if idx > 0 else None                # one step forward
+    older = days[idx + 1] if idx + 1 < len(days) else None
+    newer = days[idx - 1] if idx > 0 else None
     older_html = (
         f'<a href="{html.escape(_day_href(older, is_index))}" title="{html.escape(older)}">◀</a>'
         if older else '<span class="dim">◀</span>'
@@ -1979,48 +1558,226 @@ def render_day_nav(current: str, days: list[str], is_index: bool) -> str:
         f'<a href="{html.escape(_day_href(newer, is_index))}" title="{html.escape(newer)}">▶</a>'
         if newer else '<span class="dim">▶</span>'
     )
-
     return (
-        '<nav class="day-nav">'
-        f"{older_html}"
-        f'<span class="day-strip">{strip}</span>'
-        f"{newer_html}"
-        "</nav>"
+        '<nav class="nav day-nav">'
+        f'{older_html}<span class="day-strip">'
+        + "".join(chip(d) for d in visible_asc)
+        + f'</span>{newer_html}</nav>'
     )
 
 
-def render_alpha_teaser(alpha: dict) -> str:
+def single_bar(net: int, max_abs: int, width: int = 24) -> str:
+    if max_abs <= 0:
+        return "░" * width
+    n = max(1 if net else 0, round(width * abs(net) / max_abs))
+    return "█" * n + "░" * (width - n)
+
+
+def signed_int(n: int) -> str:
+    return f"{n:+d}"
+
+
+def render_flow_table(d: dict, day: str) -> str:
+    rows = d["top_mentions"][:15]
+    if not rows:
+        return '<p class="dim">no panel data for this night yet.</p>'
+    max_abs_net = max((abs(r["net"] or 0) for r in rows), default=1) or 1
+    out = [
+        '<table class="flow-table">',
+        '<thead><tr><th>ticker</th><th class="num">net</th><th>bar</th><th class="spark-col">14d</th></tr></thead><tbody>',
+    ]
+    for r in rows:
+        net = r["net"] or 0
+        cls = "up" if net > 0 else "down" if net < 0 else "zero"
+        out.append(
+            '<tr>'
+            f'<td class="ticker">${html.escape(r["ticker"])}</td>'
+            f'<td class="num {cls}">{signed_int(net)}</td>'
+            f'<td class="bar {cls}">{single_bar(net, max_abs_net)}</td>'
+            f'<td class="spark spark-col">{html.escape(r.get("sparkline") or "")}</td>'
+            '</tr>'
+        )
+    out.append('</tbody></table>')
+    return "".join(out)
+
+
+def compute_insight(con, latest_day: str) -> str:
+    rows = [dict(r) for r in con.execute(
+        """
+        WITH ticker_days AS (
+          SELECT m.ticker, DATE(ru.started_at) AS day,
+                 SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1
+                          WHEN m.sentiment_hint='bearish' THEN -1
+                          ELSE 0 END) AS net
+          FROM mentions m
+          JOIN responses r ON m.response_id = r.id
+          JOIN runs ru ON r.run_id = ru.id
+          WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0
+          GROUP BY m.ticker, day
+        ), firsts AS (
+          SELECT ticker, MIN(day) AS first_day FROM ticker_days GROUP BY ticker
+        )
+        SELECT td.ticker, td.net
+        FROM ticker_days td JOIN firsts f USING (ticker)
+        WHERE td.day = ? AND f.first_day = ? AND td.net > 0
+        ORDER BY td.net DESC, td.ticker
+        LIMIT 2
+        """,
+        (latest_day, latest_day),
+    ).fetchall()]
+    clauses = []
+    if rows:
+        names = [f"${r['ticker']}" for r in rows]
+        joined = names[0] if len(names) == 1 else f"{names[0]} and {names[1]}"
+        clauses.append(f"{joined} entered the flow for the first time tonight")
+
+    leaders = [dict(r) for r in con.execute(
+        """
+        SELECT day, ticker, net FROM (
+            SELECT DATE(ru.started_at) AS day, m.ticker,
+                   SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1
+                            WHEN m.sentiment_hint='bearish' THEN -1
+                            ELSE 0 END) AS net,
+                   ROW_NUMBER() OVER (PARTITION BY DATE(ru.started_at)
+                     ORDER BY SUM(CASE WHEN m.sentiment_hint='bullish' THEN 1
+                                        WHEN m.sentiment_hint='bearish' THEN -1
+                                        ELSE 0 END) DESC, m.ticker) AS rk
+            FROM mentions m
+            JOIN responses r ON m.response_id = r.id
+            JOIN runs ru ON r.run_id = ru.id
+            WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0
+            GROUP BY day, m.ticker
+        ) WHERE rk = 1
+        ORDER BY day DESC
+        """
+    ).fetchall()]
+    lead = next((r for r in leaders if r["day"] == latest_day), leaders[0] if leaders else None)
+    if lead:
+        streak = 0
+        for r in leaders:
+            if r["ticker"] == lead["ticker"]:
+                streak += 1
+            else:
+                break
+        if streak >= 2:
+            clauses.append(f"${lead['ticker']} leads for the {ordinal(streak)} straight night")
+    if not clauses and lead:
+        clauses.append(f"${lead['ticker']} leads tonight's flow at {signed_int(lead['net'] or 0)}")
+    if not clauses:
+        clauses.append("the panel logged no positive flow tonight")
+    return "; ".join(clauses) + "."
+
+
+def render_scoreboard_stat(alpha: dict) -> str:
     if not alpha.get("available"):
-        return "benchmark waiting for price cache"
+        return '<p class="stat-rest">scoreboard waiting for price data.</p>'
     s = alpha["summary"]
+    excess = s["cum_top_vs_qqq"]
+    cls = "up" if excess >= 0 else "down"
+    caveat = "; not yet statistically significant" if s["n_days"] < 60 else ""
     return (
-        f"top{alpha['top_n']} {fmt_pct(s['top_avg']).strip()} avg · "
-        f"vs QQQ {fmt_pct(s['vs_qqq_avg']).strip()} over {s['n_days']} days"
+        f'<div class="stat-num {cls}">{html.escape(fmt_signed_pct(excess))} vs QQQ</div>'
+        f'<p class="stat-rest">cumulative excess of the nightly top-{alpha["top_n"]} '
+        f"basket over QQQ across {s['n_days']} sessions, next open to close"
+        f"{caveat}.</p>"
     )
+
+
+def render_pipeline(con, days_span: int = 25) -> str:
+    today = date.today()
+    dates = [(today - timedelta(days=i)).isoformat() for i in reversed(range(days_span))]
+    states = {d: {"clean": False, "excluded": False} for d in dates}
+    for r in con.execute(
+        """
+        SELECT DATE(started_at) AS day,
+               MAX(CASE WHEN is_clean=1 THEN 1 ELSE 0 END) AS has_clean,
+               MAX(CASE WHEN is_clean=0 THEN 1 ELSE 0 END) AS has_excluded
+        FROM runs
+        WHERE DATE(started_at) BETWEEN ? AND ?
+        GROUP BY day
+        """,
+        (dates[0], dates[-1]),
+    ).fetchall():
+        if r["day"] in states:
+            states[r["day"]] = {"clean": bool(r["has_clean"]), "excluded": bool(r["has_excluded"])}
+    ran = sum(1 for d in dates if states[d]["clean"])
+    pieces = ['<div class="pipeline">']
+    for d in dates:
+        st = states[d]
+        if st["clean"]:
+            pieces.append(f'<a class="pipeline-square clean" href="day/{html.escape(d)}.html" title="{html.escape(d)}">■</a>')
+        elif st["excluded"]:
+            pieces.append(f'<span class="pipeline-square excluded" title="{html.escape(d)}">◧</span>')
+        else:
+            pieces.append(f'<span class="pipeline-square missed" title="{html.escape(d)}">□</span>')
+    pieces.append(f'<span class="caption">{ran} of {days_span} nights</span></div>')
+    return "".join(pieces)
+
+
+def render_alpha_source(alpha: dict) -> str:
+    if not alpha.get("available"):
+        return "Source: nightly model runs · prices via yfinance · as of pending"
+    return f"Source: nightly model runs · prices via yfinance · as of {html.escape(alpha['summary']['latest_trade_date'])}"
 
 
 def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[str],
-                      n_total_responses: int) -> str:
-    """The /index.html landing page. Stripped down: today's hero chart, three
-    compact trend tables, one collapsible explainer. Detailed per-day data
-    lives on /day/<date>.html; full trends on /trends.html."""
-    return HTML_INDEX_TMPL.format(
-        current_day=html.escape(day),
-        rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        n_clean_days=len(days),
-        n_total_responses=n_total_responses,
+                      n_total_responses: int, con) -> tuple[str, str, str]:
+    insight = compute_insight(con, day)
+    score_stat = render_scoreboard_stat(alpha)
+    content = f"""
+<section id="flow">
+  <div class="label">TONIGHT'S FLOW · {html.escape(day)} · net = bullish − bearish mentions across 60 responses</div>
+  {render_flow_table(d, day)}
+  <p class="insight">{html.escape(insight)}</p>
+</section>
+
+<section id="scoreboard">
+  <div class="label">SCOREBOARD</div>
+  <div class="scoreboard">
+    {render_alpha_svg(alpha, compact=True)}
+    <div>
+      {score_stat}
+      <div class="source">{render_alpha_source(alpha)}</div>
+      <div class="more"><a href="alpha.html">full scoreboard</a></div>
+    </div>
+  </div>
+</section>
+
+<div class="teaser-grid">
+  <section id="first-sightings">
+    <h2>FIRST SIGHTINGS</h2>
+    {render_first_sightings(trends["first_sightings"][:5], trends["providers"], compact=True)}
+    <div class="more"><a href="trends.html#first-sightings">full table</a></div>
+  </section>
+  <section id="consensus">
+    <h2>CONSENSUS</h2>
+    {render_consensus(trends["consensus"][:5], trends["providers"], compact=True)}
+    <div class="more"><a href="trends.html#consensus">full table</a></div>
+  </section>
+</div>
+
+<section id="pipeline">
+  <h2>PIPELINE</h2>
+  {render_pipeline(con)}
+</section>
+
+<details>
+  <summary>terms</summary>
+  <div class="details-body">
+    <p>net means bullish mentions minus bearish mentions. flow is the ranked push models gave tickers tonight. first sighting means the first night a ticker appeared in the logged panel. consensus means more than one provider pushed the same ticker bullish.</p>
+  </div>
+</details>
+"""
+    page = page_shell(
+        title=f"pythia: {day}",
+        page="index",
+        masthead=render_masthead(d, len(days)),
+        nav=render_main_nav(),
         day_nav=render_day_nav(day, days, is_index=True),
-        alpha_chart=render_alpha_svg(alpha, compact=True),
-        alpha_teaser=html.escape(render_alpha_teaser(alpha)),
-        hero_chart=html.escape(render_hero_chart(d)),
-        explainer=html.escape(EXPLAINER),
-        first_sightings=render_first_sightings(
-            trends["first_sightings"][:8], trends["providers"]
-        ),
-        consensus=render_consensus(trends["consensus"][:8], trends["providers"]),
-        rolling_7d=html.escape(render_rolling_top(trends["top_7d"][:8], "7 days")),
-        footer=html.escape(FOOTER),
+        content=content,
+        footer=render_footer(),
     )
+    return page, insight, score_stat
 
 
 def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
@@ -2029,62 +1786,155 @@ def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
         n_runs=counts["n_runs"],
         n_responses=counts["n_responses_ok"],
         n_unique=counts["n_unique_tickers"],
-    )
-    panel_version = d["latest_run"]["panel_version"] if d["latest_run"] else "—"
-    return HTML_TMPL.format(
-        tagline=html.escape(TAGLINE),
-        current_day=html.escape(day),
+    ).replace("run(s)", "night(s)")
+    root_prefix = "../" if not is_index else ""
+    content = f"""
+<section id="flow">
+  <div class="label">TONIGHT'S FLOW · {html.escape(day)}</div>
+  {render_flow_table(d, day)}
+</section>
+<section id="findings">
+  <h2>DETAILS</h2>
+  <pre class="intro">{html.escape(intro_findings)}</pre>
+  <h3>full breakdown: bull / bear / neut / ctx per ticker</h3>
+  <div class="scroll"><pre class="tbl">{html.escape(render_top_mentions(d))}</pre></div>
+  <h3>who is asking?</h3>
+  <div class="scroll"><pre class="tbl">{html.escape(render_persona_delta(d))}</pre></div>
+</section>
+<section id="samples">
+  <h2>SEE FOR YOURSELF</h2>
+  <div class="scroll"><pre>{html.escape(render_samples(d))}</pre></div>
+</section>
+<section id="method">
+  <h2>METHOD</h2>
+  <h3>the 10 questions</h3>
+  <div class="scroll"><pre>{html.escape(render_prompts(d))}</pre></div>
+  <h3>the 2 personas</h3>
+  <div class="scroll"><pre>{html.escape(render_personas(d))}</pre></div>
+  <h3>model surfaces</h3>
+  <div class="scroll"><pre class="tbl">{html.escape(render_model_configs(d))}</pre></div>
+</section>
+"""
+    return page_shell(
+        title=f"pythia: {day}",
+        page="day",
+        masthead=render_masthead(d, len(days), page_name=day, compact=True),
+        nav=render_main_nav(root_prefix),
         day_nav=render_day_nav(day, days, is_index),
-        root_prefix="../" if not is_index else "",
-        rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        panel_version=html.escape(panel_version),
-        hero_chart=html.escape(render_hero_chart(d)),
-        caption=html.escape(CAPTION),
-        why=html.escape(WHY),
-        intro_findings=html.escape(intro_findings),
-        intro_top_mentions=html.escape(INTRO_TOP_MENTIONS),
-        intro_persona_delta=html.escape(INTRO_PERSONA_DELTA),
-        intro_samples=html.escape(INTRO_SAMPLES),
-        intro_prompts=html.escape(INTRO_PROMPTS),
-        intro_personas=html.escape(INTRO_PERSONAS),
-        intro_models=html.escape(INTRO_MODELS),
-        top_mentions=html.escape(render_top_mentions(d)),
-        persona_delta=html.escape(render_persona_delta(d)),
-        samples=html.escape(render_samples(d)),
-        prompts=html.escape(render_prompts(d)),
-        personas=html.escape(render_personas(d)),
-        model_configs=html.escape(render_model_configs(d)),
-        overview=html.escape(render_overview(d)),
-        runs=html.escape(render_runs(d)),
-        footer=html.escape(FOOTER),
-        db_rel=html.escape(str(DB_PATH.relative_to(ROOT) if DB_PATH.is_relative_to(ROOT) else DB_PATH.name)),
-        root=html.escape(REPO_URL),
+        content=content,
+        footer=render_footer(root_prefix),
+        root_prefix=root_prefix,
     )
 
 
-def render_alpha_page(alpha: dict) -> str:
+def render_trends_page(d: dict, trends: dict, days: list[str], n_total_responses: int) -> str:
+    content = f"""
+<section id="rolling7">
+  <h2>LAST 7 DAYS</h2>
+  <div class="scroll"><pre class="tbl">{html.escape(render_rolling_top(trends["top_7d"], "7 days"))}</pre></div>
+</section>
+<section id="rolling30">
+  <h2>LAST 30 DAYS</h2>
+  <div class="scroll"><pre class="tbl">{html.escape(render_rolling_top(trends["top_30d"], "30 days"))}</pre></div>
+</section>
+<section id="alltime">
+  <h2>ALL TIME</h2>
+  <div class="scroll"><pre class="tbl">{html.escape(render_rolling_top(trends["top_all"], "all-time"))}</pre></div>
+</section>
+<section id="first-sightings">
+  <h2>FIRST SIGHTINGS</h2>
+  {render_first_sightings(trends["first_sightings"], trends["providers"])}
+</section>
+<section id="consensus">
+  <h2>CONSENSUS</h2>
+  {render_consensus(trends["consensus"], trends["providers"])}
+</section>
+<section id="days">
+  <h2>ALL NIGHTS</h2>
+  <div class="scroll"><pre class="tbl">{html.escape(render_days_index(trends["days_index"]).replace("clean days", "nights"))}</pre></div>
+</section>
+"""
+    return page_shell(
+        title="pythia: trends",
+        page="trends",
+        masthead=render_masthead(d, len(days), page_name="trends", compact=True),
+        nav=render_main_nav(),
+        day_nav="",
+        content=content,
+        footer=render_footer(),
+    )
+
+
+def render_alpha_page(alpha: dict, d: dict, days: list[str]) -> str:
     definition = (
-        "signal date = clean panel run timestamp converted to ET calendar date\n"
-        "basket = top 20 tickers by daily net score (bullish mentions - bearish mentions),\n"
-        "         equal-weighted (unhedged)\n"
+        "signal date = panel timestamp converted to ET calendar date\n"
+        "basket = top 20 tickers by daily net score, equal weighted\n"
         "entry = next market session open\n"
         "exit = same market session close\n"
-        "top20 = aggregate next-session return of the basket\n"
-        "vs QQQ = top20 return - QQQ return (the highlighted benchmark)\n"
-        "weekend/holiday runs that share a session are collapsed to the last signal\n\n"
-        "this is a paper benchmark, not a tradable recommendation. it is meant "
-        "to answer whether pythia's own ranking contains incremental signal "
-        "before adding sector, factor, liquidity, or prompt-seed controls."
+        "QQQ = same-session benchmark\n"
+        "weekend and holiday panels that share a session are collapsed to the last signal\n\n"
+        "this is a paper benchmark, not a tradable recommendation. it asks whether the ranking contains signal before sector, factor, liquidity, or prompt-seed controls."
     )
-    return HTML_ALPHA_TMPL.format(
-        rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        alpha_chart=render_alpha_svg(alpha),
-        definition=html.escape(definition),
-        summary=html.escape(render_alpha_summary(alpha)),
-        table=html.escape(render_alpha_table(alpha)),
-        footer=html.escape(FOOTER),
+    content = f"""
+<section>
+  <div class="label">CUMULATIVE BASKET AND QQQ</div>
+  {render_alpha_svg(alpha)}
+  <div class="source">{render_alpha_source(alpha)}</div>
+</section>
+<section>
+  <h2>DEFINITION</h2>
+  <pre class="intro">{html.escape(definition)}</pre>
+</section>
+<section>
+  <h2>RUNNING AVERAGES</h2>
+  <div class="scroll"><pre class="tbl">{html.escape(render_alpha_summary(alpha))}</pre></div>
+</section>
+<section>
+  <h2>DAILY ROWS</h2>
+  <div class="scroll"><pre class="tbl">{html.escape(render_alpha_table(alpha))}</pre></div>
+</section>
+"""
+    return page_shell(
+        title="pythia: scoreboard",
+        page="alpha",
+        masthead=render_masthead(d, len(days), page_name="scoreboard", compact=True),
+        nav=render_main_nav(),
+        day_nav="",
+        content=content,
+        footer=render_footer(),
     )
 
+
+def render_prompts_page(d: dict, days: list[str], preamble: str, assembled_on: str) -> str:
+    content = f"""
+<section>
+  <h2>ASSEMBLY</h2>
+  <pre class="intro">every model receives one assembled string: persona context, global preamble, then the question.</pre>
+  <h3>example: portfolio_01 x speculator</h3>
+  <div class="scroll"><pre>{html.escape(assembled_on)}</pre></div>
+</section>
+<section>
+  <h2>PREAMBLE</h2>
+  <div class="scroll"><pre>{html.escape("  " + preamble.replace(chr(10), chr(10) + "  ") if preamble else "missing")}</pre></div>
+</section>
+<section>
+  <h2>PERSONAS</h2>
+  <div class="scroll"><pre>{html.escape(render_personas(d))}</pre></div>
+</section>
+<section>
+  <h2>QUESTIONS</h2>
+  <div class="scroll"><pre>{html.escape(render_prompts(d))}</pre></div>
+</section>
+"""
+    return page_shell(
+        title="pythia: methodology",
+        page="prompts",
+        masthead=render_masthead(d, len(days), page_name="methodology", compact=True),
+        nav=render_main_nav(),
+        day_nav="",
+        content=content,
+        footer=render_footer(),
+    )
 
 def main() -> int:
     if not DB_PATH.exists():
@@ -2096,137 +1946,74 @@ def main() -> int:
     day_dir.mkdir(parents=True, exist_ok=True)
     if ASSETS_DIR.exists():
         shutil.copytree(ASSETS_DIR, out_dir / "assets", dirs_exist_ok=True)
+    (out_dir / "assets").mkdir(parents=True, exist_ok=True)
+    (out_dir / "assets" / "favicon.svg").write_text(FAVICON_SVG, encoding="utf-8")
 
     con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
     try:
         days = list_clean_days(con)
         if not days:
-            placeholder = (
-                "<!doctype html><html><head><meta charset=\"utf-8\">"
-                "<title>pythia</title></head><body style=\"background:#0a0a0a;"
-                "color:#e6e4dd;font-family:monospace;padding:40px;\">"
-                "<pre>no clean runs yet — pythia is collecting.</pre>"
-                "</body></html>"
+            placeholder = page_shell(
+                title="pythia",
+                page="index",
+                masthead='<header class="masthead"><div class="wordmark">PYTHIA</div></header>',
+                nav="",
+                day_nav="",
+                content='<section><p>no panels yet. pythia is collecting.</p></section>',
+                footer=render_footer(),
             )
             OUT_PATH.write_text(placeholder, encoding="utf-8")
-            print(f"wrote {OUT_PATH} (no clean days yet)")
+            print(f"wrote {OUT_PATH} (no panels yet)")
             return 0
 
-        # Render every clean day as its own snapshot under dist/day/.
         for day in days:
-            d = fetch(con, day=day)
-            page = render_main_page(d, day, days, is_index=False)
+            d_day = fetch(con, day=day)
+            page = render_main_page(d_day, day, days, is_index=False)
             day_path = day_dir / f"{day}.html"
             day_path.write_text(page, encoding="utf-8")
             print(f"wrote {day_path}  ({len(page)} bytes)")
 
-        # Global panel data (for prompts subpage) + cumulative trends.
         d = fetch(con, day=None)
         trends = fetch_trends(con)
         alpha = fetch_alpha(con)
         n_total_responses = sum(r.get("n_responses") or 0 for r in trends["days_index"])
 
-        # Index = focused landing: today's hero + trend highlights.
         latest = days[0]
         d_latest = fetch(con, day=latest)
-        index_page = render_index_page(d_latest, trends, alpha, latest, days, n_total_responses)
+        index_page, insight, score_stat = render_index_page(
+            d_latest, trends, alpha, latest, days, n_total_responses, con
+        )
         OUT_PATH.write_text(index_page, encoding="utf-8")
         print(f"wrote {OUT_PATH}  ({len(index_page)} bytes)  [index = {latest}, focused]")
+        print(f"insight: {insight}")
+        print(f"scoreboard: {score_stat}")
+
+        trends_page = render_trends_page(d, trends, days, n_total_responses)
+        OUT_TRENDS_PATH.write_text(trends_page, encoding="utf-8")
+        print(f"wrote {OUT_TRENDS_PATH}  ({len(trends_page)} bytes)")
+
+        alpha_page = render_alpha_page(alpha, d, days)
+        OUT_ALPHA_PATH.write_text(alpha_page, encoding="utf-8")
+        print(f"wrote {OUT_ALPHA_PATH}  ({len(alpha_page)} bytes)")
+
+        preamble = load_preamble()
+        example_prompt = next((p for p in d["prompts"] if p["id"] == "portfolio_01"),
+                              d["prompts"][0] if d["prompts"] else None)
+        example_persona = next((p for p in d["personas"] if p["id"] == "speculator"),
+                               d["personas"][0] if d["personas"] else None)
+        if example_prompt and example_persona and preamble:
+            assembled_on = assemble_example(
+                example_persona["description"], example_prompt["text"], preamble, "on"
+            )
+        else:
+            assembled_on = "unavailable: db missing prompts or personas"
+        prompts_page = render_prompts_page(d, days, preamble, assembled_on)
+        OUT_PROMPTS_PATH.write_text(prompts_page, encoding="utf-8")
+        print(f"wrote {OUT_PROMPTS_PATH}  ({len(prompts_page)} bytes)")
     finally:
         con.close()
-
-    # ── trends subpage ──
-    trends_page = HTML_TRENDS_TMPL.format(
-        rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        n_days=len(days),
-        n_responses=n_total_responses,
-        intro_rolling=html.escape(
-            "rolling windows: top tickers ranked by net (bullish - bearish) "
-            "over the window. `days` is the count of distinct days the ticker "
-            "appeared (persistence). the trend sparkline covers the last 30 "
-            "clean days. when there's less than the window's worth of data, "
-            "values are just whatever is available."
-        ),
-        intro_first_sightings=html.escape(
-            "tickers ordered by first appearance in clean runs, newest first. "
-            "useful for spotting names that have newly entered the "
-            "recommendation flow. per-provider cells are bull/bear counts; "
-            "net aggregates all sentiment from first sighting through now."
-        ),
-        intro_consensus=html.escape(
-            "tickers where multiple providers contributed bullish mentions "
-            "(across all clean days). provider-count agreement is a stronger "
-            "signal that the recommendation flow is consensus, not a quirk "
-            "of one model surface. per-provider cells are bull/bear counts."
-        ),
-        intro_days=html.escape(
-            "every clean run grouped by calendar day. click → to open that "
-            "day's snapshot. lead-pick column = the highest-net ticker for "
-            "the day."
-        ),
-        rolling_7d=html.escape(render_rolling_top(trends["top_7d"], "7 days")),
-        rolling_30d=html.escape(render_rolling_top(trends["top_30d"], "30 days")),
-        rolling_all=html.escape(render_rolling_top(trends["top_all"], "all-time")),
-        first_sightings=render_first_sightings(trends["first_sightings"], trends["providers"]),
-        consensus=render_consensus(trends["consensus"], trends["providers"]),
-        days_index=html.escape(render_days_index(trends["days_index"])),
-        footer=html.escape(FOOTER),
-    )
-    OUT_TRENDS_PATH.write_text(trends_page, encoding="utf-8")
-    print(f"wrote {OUT_TRENDS_PATH}  ({len(trends_page)} bytes)")
-
-    # ── alpha benchmark subpage ──
-    alpha_page = render_alpha_page(alpha)
-    OUT_ALPHA_PATH.write_text(alpha_page, encoding="utf-8")
-    print(f"wrote {OUT_ALPHA_PATH}  ({len(alpha_page)} bytes)")
-
-    # ── prompts subpage ──
-    preamble = load_preamble()
-    example_prompt = next((p for p in d["prompts"] if p["id"] == "portfolio_01"),
-                          d["prompts"][0] if d["prompts"] else None)
-    example_persona = next((p for p in d["personas"] if p["id"] == "speculator"),
-                           d["personas"][0] if d["personas"] else None)
-    if example_prompt and example_persona and preamble:
-        assembled_on = assemble_example(
-            example_persona["description"], example_prompt["text"], preamble, "on"
-        )
-    else:
-        assembled_on = "(unavailable — db missing prompts or personas)"
-
-    prompts_page = HTML_PROMPTS_TMPL.format(
-        rendered=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        assembly_intro=html.escape(
-            "every CLI invocation receives one assembled string via stdin: "
-            "the persona context, then the global preamble, then the actual "
-            "question. below is the literal text the model sees for one "
-            "example tuple."
-        ),
-        assembled_on=html.escape(assembled_on),
-        preamble_intro=html.escape(
-            "instructs every model to ground its answer in current market "
-            "state and to prefix every ticker with $ so extraction is "
-            "deterministic. identical across every model + persona."
-        ),
-        preamble_block=html.escape("  " + preamble.replace("\n", "\n  ") if preamble else "(missing)"),
-        personas_intro=html.escape(
-            "these two descriptions are injected as 'about me:' context "
-            "before every question. they bracket the spectrum of who is "
-            "plausibly asking an AI for investment advice."
-        ),
-        personas_full=html.escape(render_personas(d)),
-        prompts_intro=html.escape(
-            "10 questions, asked verbatim each run. some deliberately name "
-            "tickers (NVDA, TSLA) — those mirror real retail queries, and "
-            "the volume the model returns on those names is the recommendation "
-            "flow we want to measure."
-        ),
-        prompts_full=html.escape(render_prompts(d)),
-        footer=html.escape(FOOTER),
-    )
-    OUT_PROMPTS_PATH.write_text(prompts_page, encoding="utf-8")
-    print(f"wrote {OUT_PROMPTS_PATH}  ({len(prompts_page)} bytes)")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
