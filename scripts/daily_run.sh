@@ -40,6 +40,9 @@ fi
   uv run scripts/benchmark_alpha.py --rebuild-signals || true
   echo "--- rendering dashboard ---"
   uv run scripts/render_page.py || true
+  echo "--- publishing dashboard ---"
+  # Pushes dist/ to the gh-pages branch (gbasin.github.io/pythia).
+  ./scripts/publish_pages.sh || true
   echo "--- health check ---"
   # Inspects this run, pushes critical issues to ntfy + files GitHub issues.
   # `|| true` so a transport hiccup never fails the pipeline.
