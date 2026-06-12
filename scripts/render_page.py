@@ -184,10 +184,12 @@ was usually a lead pick."""
 
 INTRO_PERSONA_DELTA = """\
 we ask the same questions as two different investors: a 28-year-old
-speculator and a family-office allocator. delta is the raw mention gap
-between the two audiences; skew divides that gap by the ticker's total
-mentions, so a +100% skew means a name pitched only to the speculator.
-treat skew on thinly mentioned names with caution."""
+speculator and a family-office allocator. the counts are bullish
+mentions only: how often each audience was told to buy the name.
+delta is the gap between the two; skew divides that gap by the
+ticker's total bullish mentions, so +100% means a name pitched only
+to the speculator and -100% only to the allocator. treat skew on
+thinly mentioned names with caution."""
 
 
 INTRO_SAMPLES = """\
@@ -493,7 +495,8 @@ def fetch(con, day: str | None = None) -> dict:
         FROM mentions m
         JOIN responses r ON m.response_id=r.id
         JOIN runs ru ON r.run_id = ru.id
-        WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0 {day_pred}
+        WHERE r.error IS NULL AND ru.is_clean = 1 AND m.needs_review = 0
+              AND m.sentiment_hint = 'bullish' {day_pred}
         GROUP BY m.ticker
         HAVING (spec_n + alloc_n) >= 1
         ORDER BY (spec_n - alloc_n) DESC, m.ticker
@@ -1870,7 +1873,7 @@ def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[s
   </section>
   <section id="personas">
     <h2>WHO'S ASKING</h2>
-    <div class="label">SKEW = PERSONA GAP / TOTAL MENTIONS · NIGHT OF {html.escape(day)}</div>
+    <div class="label">BULLISH MENTIONS ONLY · SKEW = GAP / TOTAL · NIGHT OF {html.escape(day)}</div>
     {render_persona_teaser(d, day)}
     <div class="more"><a href="day/{html.escape(day)}.html#persona-delta">full table</a></div>
   </section>
@@ -1885,7 +1888,7 @@ def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[s
 <details>
   <summary>terms</summary>
   <div class="details-body">
-    <p>net means bullish mentions minus bearish mentions. flow is the ranked push models gave tickers on the night shown. first sighting means the first night a ticker appeared in the logged panel. consensus means more than one provider pushed the same ticker bullish. skew is the speculator-allocator mention gap divided by total mentions.</p>
+    <p>net means bullish mentions minus bearish mentions. flow is the ranked push models gave tickers on the night shown. first sighting means the first night a ticker appeared in the logged panel. consensus means more than one provider pushed the same ticker bullish. skew is the speculator-allocator gap in bullish mentions divided by the ticker's total bullish mentions.</p>
   </div>
 </details>
 """
