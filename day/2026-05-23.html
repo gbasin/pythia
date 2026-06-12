@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pythia: 2026-05-23</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="what frontier AI models told people to buy on 2026-05-23">
+<meta property="og:title" content="pythia: 2026-05-23">
+<meta property="og:description" content="what frontier AI models told people to buy on 2026-05-23">
+<meta property="og:site_name" content="pythia">
+<meta name="theme-color" content="#43464c">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<style>
+/* BASE_CSS — Qt desktop-app skin (Fusion-style widgets, light + dark palettes) */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('../assets/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('../assets/fonts/JetBrainsMono-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+:root {
+  color-scheme: light;
+  --backdrop: radial-gradient(120% 130% at 50% 0%, #585c63 0%, #43464c 55%, #34373c 100%);
+  --win: #efefef;          /* QPalette::Window */
+  --base: #ffffff;         /* QPalette::Base */
+  --alt: #f6f6f6;          /* QPalette::AlternateBase */
+  --text: #1c1c1c;
+  --dim: #6b6b6b;
+  --frame: #b4b4b4;        /* sunken/raised frame line */
+  --frame-light: #c9c9c9;
+  --gridline: #efefef;     /* table cell separators */
+  --hl: #308cc6;           /* Fusion highlight */
+  --hl-text: #ffffff;
+  --hover-row: #e6f2fa;
+  --link: #0a66b8;
+  --up: #1d6fa5;
+  --down: #b3261e;
+  --zero: #9a9a9a;
+  --bear: #8a8a8a;
+  --bear-zero: #c4c4c4;
+  --spark: #9a9a9a;
+  --axis: #9a9a9a;
+  --plot-grid: #e7e7e7;
+  --plot-zero: #b0b0b0;
+  --qqq: #909090;
+  --title-grad: linear-gradient(#f6f6f6, #dcdcdc);
+  --title-border: #b0b0b0;
+  --title-text: #333333;
+  --btn-grad: linear-gradient(#fefefe, #e8e8e8);
+  --btn-hover-grad: linear-gradient(#ffffff, #ededed);
+  --btn-border: #a9a9a9;
+  --hdr-grad: linear-gradient(#ffffff, #e5e5e5);
+  --hdr-border: #d4d4d4;
+  --tab-grad: linear-gradient(#ececec, #dcdcdc);
+  --dock-grad: linear-gradient(#ececec, #dedede);
+  --chunk-grad: linear-gradient(#55a3d8, #2a7fc0);
+  --chunk-border: #1d6fa5;
+  --chunk-neg-grad: linear-gradient(#d87a6c, #c0503f);
+  --chunk-neg-border: #a53e2e;
+  --seg-alloc-grad: linear-gradient(#a9a9a9, #8d8d8d);
+  --seg-alloc-border: #7d7d7d;
+  --axis-split: #9a9a9a;
+  --sunken-dark: #c0c0c0;
+  --sunken-light: #fdfdfd;
+  --grip-dot: #9a9a9a;
+  --win-border: #8f8f8f;
+  --close-hover: #e81123;
+  --font-ui: 'Segoe UI', 'Helvetica Neue', 'Cantarell', 'Ubuntu', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --backdrop: radial-gradient(120% 130% at 50% 0%, #2c2e32 0%, #222428 55%, #1a1b1e 100%);
+    --win: #353535;
+    --base: #232323;
+    --alt: #2b2b2b;
+    --text: #d8d8d8;
+    --dim: #9f9f9f;
+    --frame: #1f1f1f;
+    --frame-light: #2a2a2a;
+    --gridline: #2f2f2f;
+    --hl: #2a82da;
+    --hl-text: #ffffff;
+    --hover-row: #2c3a46;
+    --link: #6ab0e8;
+    --up: #6ab0e8;
+    --down: #e57368;
+    --zero: #7d7d7d;
+    --bear: #8d8d8d;
+    --bear-zero: #4d4d4d;
+    --spark: #777777;
+    --axis: #8a8a8a;
+    --plot-grid: #333333;
+    --plot-zero: #555555;
+    --qqq: #8a8a8a;
+    --title-grad: linear-gradient(#3f3f3f, #313131);
+    --title-border: #232323;
+    --title-text: #cccccc;
+    --btn-grad: linear-gradient(#484848, #3b3b3b);
+    --btn-hover-grad: linear-gradient(#525252, #434343);
+    --btn-border: #292929;
+    --hdr-grad: linear-gradient(#454545, #383838);
+    --hdr-border: #2e2e2e;
+    --tab-grad: linear-gradient(#3a3a3a, #303030);
+    --dock-grad: linear-gradient(#3a3a3a, #313131);
+    --chunk-grad: linear-gradient(#3a8fd6, #2a6faf);
+    --chunk-border: #1d5a8f;
+    --chunk-neg-grad: linear-gradient(#c0604f, #a04030);
+    --chunk-neg-border: #7d3022;
+    --seg-alloc-grad: linear-gradient(#7d7d7d, #696969);
+    --seg-alloc-border: #585858;
+    --axis-split: #6f6f6f;
+    --sunken-dark: #222222;
+    --sunken-light: #454545;
+    --grip-dot: #6f6f6f;
+    --win-border: #181818;
+    --close-hover: #c11020;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  min-height: 100vh;
+  background: var(--backdrop);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums lining-nums;
+  padding: 24px 16px 36px;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+a:focus-visible, summary:focus-visible, select:focus-visible { outline: 2px solid var(--hl); outline-offset: 1px; }
+header, nav, main, section, footer, pre, table, p, h1, h2, h3, figure { margin: 0; }
+pre { white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; font: 12px/1.5 var(--font-mono); }
+.dim, .intro, .source, .caption { color: var(--dim); }
+.nb { white-space: nowrap; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.scroll { overflow-x: auto; max-width: 100%; }
+
+/* ---------- window ---------- */
+.window {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  background: var(--win);
+  border: 1px solid var(--win-border);
+  border-radius: 7px;
+  box-shadow: 0 22px 60px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.35);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- title bar + menu bar ---------- */
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  background: var(--title-grad);
+  border-bottom: 1px solid var(--title-border);
+  user-select: none;
+}
+.titlebar .home-link {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  color: inherit;
+  text-decoration: none;
+}
+.titlebar .home-link:hover { text-decoration: none; }
+.titlebar .home-link:hover .title { color: var(--hl); }
+.titlebar .app-icon { width: 16px; height: 16px; margin: 0 8px 0 10px; }
+.titlebar .title {
+  flex: 1;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--title-text);
+  margin-left: -34px;
+  padding-left: 34px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.winbtns { display: flex; height: 100%; }
+.winbtn {
+  width: 40px; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; color: var(--dim);
+}
+.winbtn:hover { background: var(--frame-light); }
+.winbtn.close:hover { background: var(--close-hover); color: #fff; }
+
+/* ---------- toolbar ---------- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--win);
+  border-bottom: 1px solid var(--frame-light);
+  user-select: none;
+}
+.tbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-size: 12px;
+  color: var(--text);
+}
+a.tbtn:hover { background: var(--btn-grad); border-color: var(--btn-border); text-decoration: none; }
+.tbtn.disabled { color: var(--zero); }
+.tsep { width: 1px; height: 20px; margin: 0 4px; background: var(--frame); box-shadow: 1px 0 0 var(--sunken-light); }
+.tspacer { flex: 1; }
+select.combo-select {
+  height: 26px;
+  padding: 0 4px;
+  border: 1px solid var(--btn-border);
+  border-radius: 3px;
+  background: var(--win);
+  color: var(--text);
+  font: 12px var(--font-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- app body: dock + main ---------- */
+.appbody { display: flex; align-items: stretch; min-height: 0; }
+.dock {
+  width: 178px;
+  flex: none;
+  border-right: 1px solid var(--frame-light);
+  background: var(--win);
+}
+.dock-inner { position: sticky; top: 8px; display: flex; flex-direction: column; }
+.dock-title {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 6px;
+  background: var(--dock-grad);
+  border-bottom: 1px solid var(--frame-light);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dim);
+  user-select: none;
+}
+.dock-title .dock-glyphs { margin-left: auto; color: var(--zero); font-size: 10px; letter-spacing: 4px; }
+.listview {
+  margin: 6px;
+  background: var(--base);
+  border: 1px solid var(--frame);
+  border-radius: 2px;
+  overflow-y: auto;
+  max-height: calc(100vh - 140px);
+  font-size: 12px;
+}
+.listview .ditem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.listview .ditem:nth-child(even) { background: var(--alt); }
+.listview .ditem:hover { background: var(--hover-row); text-decoration: none; }
+.listview .ditem.selected, .listview .ditem.selected:hover { background: var(--hl); color: var(--hl-text); }
+.listview .led { width: 7px; height: 7px; border-radius: 1px; background: var(--hl); border: 1px solid var(--chunk-border); flex: none; }
+.listview .ditem.selected .led { background: #fff; border-color: #d8ecf8; }
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 8px 10px 10px; }
+
+/* ---------- tab bar + pane ---------- */
+.tabbar {
+  display: flex;
+  align-items: flex-end;
+  padding: 0; /* first tab's left border sits flush on the pane frame */
+  user-select: none;
+  position: relative;
+  z-index: 2; /* tabs paint over the pane's top border */
+}
+.tab {
+  padding: 4px 14px 5px;
+  font-size: 12px;
+  color: var(--dim);
+  background: var(--tab-grad);
+  border: 1px solid var(--frame);
+  border-bottom: none;
+  border-radius: 3px 3px 0 0;
+  margin-right: -1px;
+  text-decoration: none;
+}
+a.tab:hover { color: var(--text); text-decoration: none; }
+.tab.active {
+  background: var(--win);
+  color: var(--text);
+  font-weight: 600;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  margin-bottom: -1px; /* overlap the pane border so tab and pane merge */
+}
+.tab .tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin: 0 -5px 0 8px;
+  border-radius: 2px;
+  font-size: 9px;
+  font-weight: 400;
+  color: var(--dim);
+  text-decoration: none;
+  vertical-align: 1px;
+}
+.tab .tab-close:hover { background: var(--close-hover); color: #fff; text-decoration: none; }
+.tabpane {
+  display: block;
+  border: 1px solid var(--frame);
+  border-radius: 0 3px 3px 3px;
+  background: var(--win);
+  padding: 14px 12px 16px;
+}
+
+/* ---------- group boxes ---------- */
+.groupbox {
+  position: relative;
+  border: 1px solid var(--frame);
+  border-radius: 3px;
+  padding: 14px 10px 10px;
+  margin-top: 18px;
+}
+.groupbox:first-child, .dek-strip + .groupbox { margin-top: 8px; }
+.dek-strip + .groupbox { margin-top: 14px; }
+.groupbox > .gtitle {
+  position: absolute;
+  top: -9px;
+  left: 8px;
+  max-width: calc(100% - 24px);
+  padding: 0 5px;
+  background: var(--win);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gnote, .insight { margin: 8px 2px 0; font-size: 12px; color: var(--dim); }
+.dek-strip { display: flex; align-items: baseline; gap: 7px; padding: 2px 2px 6px; font-size: 12.5px; color: var(--dim); }
+.dek-strip::before { content: 'ⓘ'; color: var(--hl); font-size: 13px; }
+.label { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dim); }
+.intro, .prose, .dek { font-size: 12.5px; line-height: 1.55; max-width: 86ch; }
+.intro { margin: 0 2px 10px; }
+.prose, .dek { margin-top: 8px; }
+.prose:first-child, .dek:first-child { margin-top: 0; }
+h3 { font-size: 12px; font-weight: 600; margin: 14px 2px 6px; }
+
+/* ---------- tables (QTableView) ---------- */
+.flow-table, .data-table, .alpha-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  background: var(--base);
+  border: 1px solid var(--frame);
+}
+th {
+  background: var(--hdr-grad);
+  border-bottom: 1px solid var(--frame);
+  border-right: 1px solid var(--hdr-border);
+  padding: 3px 8px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--text);
+  text-transform: capitalize;
+  user-select: none;
+}
+th:last-child { border-right: none; }
+td {
+  padding: 3px 8px;
+  border-right: 1px solid var(--gridline);
+  white-space: nowrap;
+  vertical-align: middle;
+  text-align: left;
+}
+td:last-child { border-right: none; }
+tbody tr:nth-child(even) { background: var(--alt); }
+tbody tr:hover { background: var(--hover-row); }
+td.num, th.num { text-align: right; }
+.flow-table .ticker, .data-table strong { font-weight: 600; }
+.table-scroll {
+  max-height: 340px; /* header + ~15 rows visible, rest scrolls */
+  overflow: auto;
+  border: 1px solid var(--frame);
+  border-radius: 2px;
+  background: var(--base);
+}
+.table-scroll > table { border: none; }
+.table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* border-collapse drops sticky cell borders while scrolling; the
+     shadow keeps the header rule visible */
+  box-shadow: inset 0 -1px 0 var(--frame);
+}
+.table-scroll::-webkit-scrollbar, .listview::-webkit-scrollbar { width: 13px; height: 13px; }
+.table-scroll::-webkit-scrollbar-track, .listview::-webkit-scrollbar-track { background: var(--win); border-left: 1px solid var(--frame-light); }
+.table-scroll::-webkit-scrollbar-thumb, .listview::-webkit-scrollbar-thumb { background: var(--btn-grad); border: 1px solid var(--btn-border); border-radius: 2px; }
+.gcaption { margin: -2px 0 8px; }
+.up { color: var(--up); }
+.down { color: var(--down); }
+.zero { color: var(--zero); }
+.bear { color: var(--bear); }
+.bear-zero { color: var(--bear-zero); }
+.spark { font-family: var(--font-mono); font-size: 11px; color: var(--spark); letter-spacing: 1px; white-space: nowrap; }
+
+/* ---------- progress bars (QProgressBar) ---------- */
+.pbar {
+  position: relative;
+  width: 200px;
+  height: 15px;
+  border: 1px solid var(--btn-border);
+  border-radius: 2px;
+  background: var(--base);
+  overflow: hidden;
+}
+.pbar .chunk { position: absolute; inset: 0 auto 0 0; background: var(--chunk-grad); border-right: 1px solid var(--chunk-border); }
+.pbar .chunk.neg { background: var(--chunk-neg-grad); border-right-color: var(--chunk-neg-border); }
+.pbar .ptext {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text);
+  mix-blend-mode: multiply;
+}
+@media (prefers-color-scheme: dark) {
+  .pbar .ptext { mix-blend-mode: normal; color: #eaeaea; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+}
+
+/* ---------- diverging persona bars ---------- */
+.seg { display: inline-block; height: 11px; border-radius: 1px; vertical-align: middle; }
+.seg.alloc { background: var(--seg-alloc-grad); border: 1px solid var(--seg-alloc-border); }
+.seg.spec { background: var(--chunk-grad); border: 1px solid var(--chunk-border); }
+td.side-a, th.side-a { text-align: right; }
+td.side-s, th.side-s { border-left: 2px solid var(--axis-split); }
+.side-a .count { margin-right: 5px; }
+.side-s .count { margin-left: 5px; }
+.count { display: inline-block; min-width: 2ch; font-size: 11px; vertical-align: middle; }
+
+/* ---------- provider icons ---------- */
+.provider-head { display: inline-flex; width: 3ch; align-items: center; justify-content: center; vertical-align: middle; }
+.provider-icon { width: 14px; height: 14px; display: block; filter: grayscale(100%) brightness(40%); opacity: .85; }
+@media (prefers-color-scheme: dark) {
+  .provider-icon { filter: grayscale(100%) invert(80%); }
+}
+
+/* ---------- plot (chart frame) + legend ---------- */
+.plot { border: 1px solid var(--frame); border-radius: 2px; background: var(--base); padding: 8px; }
+.legend { display: flex; gap: 14px; margin: 2px 4px 8px; font-size: 11px; color: var(--dim); }
+.legend .swatch { display: inline-block; width: 18px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 5px; }
+.legend .swatch.models { border-color: var(--chart-models, var(--up)); }
+.legend .swatch.qqq { border-color: var(--qqq); border-top-width: 1.4px; }
+.alpha-svg { width: 100%; height: auto; display: block; }
+.alpha-svg text { font: 10.5px var(--font-ui); fill: var(--axis); }
+.alpha-svg .grid { stroke: var(--plot-grid); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.alpha-svg .zero-line { stroke: var(--plot-zero); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
+.alpha-svg .models-line { stroke: var(--chart-models, var(--up)); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.alpha-svg .qqq-line { stroke: var(--qqq); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+
+/* ---------- scoreboard band ---------- */
+.scoreboard { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 14px; align-items: start; }
+.score-side { display: flex; flex-direction: column; gap: 8px; }
+.stat-frame { border: 1px solid var(--frame); border-radius: 2px; background: var(--base); padding: 10px 12px; }
+.stat-num { font-size: 21px; font-weight: 700; }
+.stat-rest { margin-top: 6px; font-size: 11.5px; color: var(--dim); line-height: 1.45; }
+.source { font-size: 10.5px; color: var(--zero); margin-top: 6px; }
+.qbutton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 14px;
+  border: 1px solid var(--btn-border);
+  border-radius: 3px;
+  background: var(--btn-grad);
+  font-size: 12px;
+  color: var(--text);
+  text-decoration: none;
+  align-self: flex-start;
+}
+.qbutton:hover { background: var(--btn-hover-grad); text-decoration: none; }
+.qbutton:active { filter: brightness(0.96); }
+.more { margin-top: 8px; font-size: 11.5px; }
+
+/* ---------- teaser row ---------- */
+.teaser-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.teaser-grid .groupbox { margin-top: 0; min-width: 0; }
+.teaser-grid .scroll { overflow-x: auto; }
+
+/* ---------- record squares ---------- */
+.pipeline { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 2px; }
+.sq { width: 13px; height: 13px; border-radius: 2px; background: var(--hl); border: 1px solid var(--chunk-border); display: inline-block; }
+.sq.missed { background: var(--base); border-color: var(--frame); }
+.sq.excluded { background: linear-gradient(135deg, var(--hl) 50%, var(--base) 50%); border-color: var(--frame); }
+a.sq:hover { outline: 2px solid var(--hover-row); outline-offset: 1px; }
+.pipeline .caption { margin-left: 10px; font-size: 11.5px; }
+
+/* ---------- terms / details expander ---------- */
+details { margin-top: 14px; padding: 2px; }
+summary { cursor: pointer; list-style: none; font-size: 12px; font-weight: 600; color: var(--text); user-select: none; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: '▸ '; color: var(--dim); }
+details[open] summary::before { content: '▾ '; }
+details .details-body { margin: 8px 0 0 14px; max-width: 90ch; font-size: 12px; color: var(--dim); line-height: 1.5; }
+
+/* ---------- exhibits (sample responses as readonly text areas) ---------- */
+.exhibit { margin-top: 14px; border: 1px solid var(--frame); border-radius: 2px; background: var(--base); overflow: hidden; }
+.exhibit figcaption {
+  display: block;
+  padding: 3px 8px;
+  background: var(--hdr-grad);
+  border-bottom: 1px solid var(--frame);
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 0.03em;
+}
+.exhibit-question { padding: 7px 10px 0; font-size: 12px; color: var(--dim); max-width: 92ch; }
+.exhibit-body { padding: 7px 10px 9px; font: 12px/1.5 var(--font-mono); color: var(--text); max-width: 100ch; }
+
+/* ---------- methodology blocks ---------- */
+.method-block { margin-top: 10px; }
+.method-block pre, .prompt-list pre {
+  border: 1px solid var(--frame);
+  border-radius: 2px;
+  background: var(--base);
+  padding: 8px 10px;
+}
+.prompt-list { display: grid; gap: 10px; max-width: 92ch; margin-top: 8px; }
+.prompt-list h3 { margin: 8px 0 0; }
+.prompt-item { border: 1px solid var(--frame-light); border-radius: 2px; background: var(--base); padding: 7px 10px; }
+.prompt-item p { margin: 3px 0 0; font-size: 12.5px; line-height: 1.5; }
+.prompt-id { font-size: 11px; font-weight: 600; color: var(--hl); }
+
+/* ---------- status bar ---------- */
+.statusbar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 3px 4px;
+  border-top: 1px solid var(--frame-light);
+  background: var(--win);
+  font-size: 11.5px;
+  color: var(--dim);
+  user-select: none;
+  z-index: 5;
+}
+.status-cell {
+  display: flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid;
+  border-color: var(--sunken-dark) var(--sunken-light) var(--sunken-light) var(--sunken-dark);
+  border-radius: 1px;
+  white-space: nowrap;
+}
+.status-cell strong { color: var(--text); font-weight: 600; }
+.status-cell.stretch { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: block; padding-top: 3px; }
+.sizegrip {
+  align-self: flex-end;
+  width: 14px; height: 14px;
+  flex: none;
+  background:
+    radial-gradient(circle at 11px 11px, var(--grip-dot) 1.2px, transparent 1.6px),
+    radial-gradient(circle at 11px 6px,  var(--grip-dot) 1.2px, transparent 1.6px),
+    radial-gradient(circle at 6px 11px,  var(--grip-dot) 1.2px, transparent 1.6px),
+    radial-gradient(circle at 11px 1px,  var(--grip-dot) 1.2px, transparent 1.6px),
+    radial-gradient(circle at 6px 6px,   var(--grip-dot) 1.2px, transparent 1.6px),
+    radial-gradient(circle at 1px 11px,  var(--grip-dot) 1.2px, transparent 1.6px);
+}
+
+/* ---------- responsive ---------- */
+@media (max-width: 900px) {
+  body { padding: 0; }
+  .window { border: none; border-radius: 0; box-shadow: none; width: 100%; min-height: 100vh; }
+  .dock { display: none; }
+  .teaser-grid { grid-template-columns: 1fr; }
+  .scoreboard { grid-template-columns: 1fr; }
+  .flow-table .spark-col { display: none; }
+  .pbar { width: 120px; }
+  .titlebar .title { font-size: 12px; }
+  .tabbar { overflow-x: auto; }
+  .toolbar { flex-wrap: wrap; }
+  .status-cell { padding: 1px 5px; }
+}
+
+</style>
+</head>
+<body>
+<div class="window">
+<div class="titlebar"><a class="home-link" href="../index.html" title="Back to overview"><img class="app-icon" src="../assets/favicon.svg" alt=""><div class="title">Pythia — Session 2026-05-23</div></a><div class="winbtns" aria-hidden="true"><span class="winbtn">─</span><span class="winbtn">▢</span><span class="winbtn close">✕</span></div></div>
+<div class="toolbar"><a class="tbtn" href="2026-05-22.html" title="previous night: 2026-05-22">◀</a><select class="combo-select" aria-label="select night" onchange="if(this.value)location.href=this.value"><option value="2026-06-11.html">2026-06-11</option><option value="2026-06-10.html">2026-06-10</option><option value="2026-06-07.html">2026-06-07</option><option value="2026-06-06.html">2026-06-06</option><option value="2026-06-05.html">2026-06-05</option><option value="2026-06-04.html">2026-06-04</option><option value="2026-06-03.html">2026-06-03</option><option value="2026-06-02.html">2026-06-02</option><option value="2026-06-01.html">2026-06-01</option><option value="2026-05-31.html">2026-05-31</option><option value="2026-05-30.html">2026-05-30</option><option value="2026-05-29.html">2026-05-29</option><option value="2026-05-28.html">2026-05-28</option><option value="2026-05-27.html">2026-05-27</option><option value="2026-05-26.html">2026-05-26</option><option value="2026-05-25.html">2026-05-25</option><option value="2026-05-24.html">2026-05-24</option><option value="2026-05-23.html" selected>2026-05-23</option><option value="2026-05-22.html">2026-05-22</option><option value="2026-05-21.html">2026-05-21</option><option value="2026-05-20.html">2026-05-20</option><option value="2026-05-19.html">2026-05-19</option><option value="2026-05-18.html">2026-05-18</option></select><a class="tbtn" href="2026-05-24.html" title="next night: 2026-05-24">▶</a><div class="tsep"></div><a class="tbtn" href="https://github.com/gbasin/pythia">⇩ Raw data</a><div class="tspacer"></div><a class="tbtn" href="../methodology.html" title="Every night we ask Claude, GPT-5.5 and Gemini what stocks to buy. We log every answer.">ⓘ About this experiment</a></div>
+<div class="appbody">
+<aside class="dock"><div class="dock-inner"><div class="dock-title">Sessions<span class="dock-glyphs" aria-hidden="true">▣ ✕</span></div><div class="listview"><a class="ditem" href="2026-06-11.html"><span class="led"></span>2026-06-11</a><a class="ditem" href="2026-06-10.html"><span class="led"></span>2026-06-10</a><a class="ditem" href="2026-06-07.html"><span class="led"></span>2026-06-07</a><a class="ditem" href="2026-06-06.html"><span class="led"></span>2026-06-06</a><a class="ditem" href="2026-06-05.html"><span class="led"></span>2026-06-05</a><a class="ditem" href="2026-06-04.html"><span class="led"></span>2026-06-04</a><a class="ditem" href="2026-06-03.html"><span class="led"></span>2026-06-03</a><a class="ditem" href="2026-06-02.html"><span class="led"></span>2026-06-02</a><a class="ditem" href="2026-06-01.html"><span class="led"></span>2026-06-01</a><a class="ditem" href="2026-05-31.html"><span class="led"></span>2026-05-31</a><a class="ditem" href="2026-05-30.html"><span class="led"></span>2026-05-30</a><a class="ditem" href="2026-05-29.html"><span class="led"></span>2026-05-29</a><a class="ditem" href="2026-05-28.html"><span class="led"></span>2026-05-28</a><a class="ditem" href="2026-05-27.html"><span class="led"></span>2026-05-27</a><a class="ditem" href="2026-05-26.html"><span class="led"></span>2026-05-26</a><a class="ditem" href="2026-05-25.html"><span class="led"></span>2026-05-25</a><a class="ditem" href="2026-05-24.html"><span class="led"></span>2026-05-24</a><a class="ditem selected" href="2026-05-23.html"><span class="led"></span>2026-05-23</a><a class="ditem" href="2026-05-22.html"><span class="led"></span>2026-05-22</a><a class="ditem" href="2026-05-21.html"><span class="led"></span>2026-05-21</a><a class="ditem" href="2026-05-20.html"><span class="led"></span>2026-05-20</a><a class="ditem" href="2026-05-19.html"><span class="led"></span>2026-05-19</a><a class="ditem" href="2026-05-18.html"><span class="led"></span>2026-05-18</a></div></div></aside>
+<div class="main">
+<nav class="tabbar"><a class="tab" href="../index.html">Overview</a><span class="tab active">2026-05-23<a class="tab-close" href="../index.html" title="Close session" aria-label="Close session, back to overview">✕</a></span><a class="tab" href="../trends.html">Trends</a><a class="tab" href="../alpha.html">Scoreboard</a><a class="tab" href="../methodology.html">Methodology</a></nav>
+<main class="tabpane">
+
+<div class="groupbox" id="flow">
+  <div class="gtitle">Recommendation flow</div>
+  <div class="label gcaption">panel of 2026-05-23 · net = bullish − bearish · 59 responses · top 24 tickers</div>
+  <div class="table-scroll"><table class="flow-table"><thead><tr><th>ticker</th><th class="num">net</th><th>flow</th><th class="spark-col">14d</th></tr></thead><tbody><tr><td class="ticker">$CEG</td><td class="num up">+16</td><td><div class="pbar"><div class="chunk" style="width:100%"></div><div class="ptext">+16</div></div></td><td class="spark spark-col">▆█▆█▆▅▆▆█▆▆▅</td></tr><tr><td class="ticker">$AVGO</td><td class="num up">+14</td><td><div class="pbar"><div class="chunk" style="width:88%"></div><div class="ptext">+14</div></div></td><td class="spark spark-col">▇▆▆▆▅▇▆▄▆▅▅▆</td></tr><tr><td class="ticker">$VRT</td><td class="num up">+13</td><td><div class="pbar"><div class="chunk" style="width:81%"></div><div class="ptext">+13</div></div></td><td class="spark spark-col">▆▆█▆██▇▆▇▆▆▆</td></tr><tr><td class="ticker">$VST</td><td class="num up">+11</td><td><div class="pbar"><div class="chunk" style="width:69%"></div><div class="ptext">+11</div></div></td><td class="spark spark-col">▄▄▆▅▆▆▅▆▆▄▆▅</td></tr><tr><td class="ticker">$SMH</td><td class="num up">+9</td><td><div class="pbar"><div class="chunk" style="width:56%"></div><div class="ptext">+9</div></div></td><td class="spark spark-col">▃▅▄▃▃▃▃▃▄▃▃▃</td></tr><tr><td class="ticker">$TSM</td><td class="num up">+8</td><td><div class="pbar"><div class="chunk" style="width:50%"></div><div class="ptext">+8</div></div></td><td class="spark spark-col">▃▄▄▃▃▄▃▃▃▃▄▃</td></tr><tr><td class="ticker">$ETN</td><td class="num up">+8</td><td><div class="pbar"><div class="chunk" style="width:50%"></div><div class="ptext">+8</div></div></td><td class="spark spark-col">▃▄▄▃▄▄▄▅▃▃▄▄</td></tr><tr><td class="ticker">$GEV</td><td class="num up">+8</td><td><div class="pbar"><div class="chunk" style="width:50%"></div><div class="ptext">+8</div></div></td><td class="spark spark-col">▃▅▄▄▄▄▄▄▆▅▅▄</td></tr><tr><td class="ticker">$MU</td><td class="num up">+8</td><td><div class="pbar"><div class="chunk" style="width:50%"></div><div class="ptext">+8</div></div></td><td class="spark spark-col">▄▆▆▃▂▃▃▄▃▃▃▃</td></tr><tr><td class="ticker">$OKLO</td><td class="num up">+7</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark spark-col">▄▃▄▄▃▄▄▄▃▅▂▃</td></tr><tr><td class="ticker">$MSTR</td><td class="num up">+7</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark spark-col">▄▄▃▃▄▅▃▃▃▄▃▄</td></tr><tr><td class="ticker">$QUAL</td><td class="num up">+7</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark spark-col">▄▄▄▄▄▃▅▅▄▄▅▄</td></tr><tr><td class="ticker">$XLE</td><td class="num up">+7</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark spark-col">▃▅▆▄▃▄▅▄▄▅▆▅</td></tr><tr><td class="ticker">$ANET</td><td class="num up">+7</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark spark-col">▃▃▃▂▃▂▃▃▃▃▃▃</td></tr><tr><td class="ticker">$GRID</td><td class="num up">+7</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark spark-col">▃▃▃▃▃▃▃▃▃▃▃▃</td></tr><tr><td class="ticker">$AVUV</td><td class="num up">+7</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark spark-col">▃▃▃▃▃▂▂▃▃▂▂▃</td></tr><tr><td class="ticker">$DBMF</td><td class="num up">+7</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark spark-col">▃▃▃▃▂▃▄▂▃▃▃▃</td></tr><tr><td class="ticker">$CCJ</td><td class="num up">+7</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark spark-col">▄▄▄▄▄▄▅▄▂▄▆▃</td></tr><tr><td class="ticker">$COIN</td><td class="num up">+6</td><td><div class="pbar"><div class="chunk" style="width:38%"></div><div class="ptext">+6</div></div></td><td class="spark spark-col">▂▂▄▄▃▄▄▃▄▄▃▄</td></tr><tr><td class="ticker">$PAVE</td><td class="num up">+6</td><td><div class="pbar"><div class="chunk" style="width:38%"></div><div class="ptext">+6</div></div></td><td class="spark spark-col">▁▃▂▁▂▃▃▃▃▂▂▃</td></tr><tr><td class="ticker">$SOXX</td><td class="num up">+5</td><td><div class="pbar"><div class="chunk" style="width:31%"></div><div class="ptext">+5</div></div></td><td class="spark spark-col">▃▃▃▃▃▃▃▃▄▃▃▃</td></tr><tr><td class="ticker">$TLN</td><td class="num up">+5</td><td><div class="pbar"><div class="chunk" style="width:31%"></div><div class="ptext">+5</div></div></td><td class="spark spark-col">▂▂▁▂▂▃▁▂▃▁▂▂</td></tr><tr><td class="ticker">$LNG</td><td class="num up">+5</td><td><div class="pbar"><div class="chunk" style="width:31%"></div><div class="ptext">+5</div></div></td><td class="spark spark-col">▃▃▃▄▄▃▃▃▃▃▄▃</td></tr><tr><td class="ticker">$OIH</td><td class="num up">+5</td><td><div class="pbar"><div class="chunk" style="width:31%"></div><div class="ptext">+5</div></div></td><td class="spark spark-col">▂▂▂▃▂▂▂▂▁▂▂▂</td></tr></tbody></table></div>
+</div>
+
+<div class="groupbox" id="full-breakdown">
+  <div class="gtitle">Full breakdown</div>
+  <p class="intro prose">each ticker mention is classified as bullish, bearish, neutral, or
+context. net is bullish minus bearish. lead position is the average
+place where the ticker first appeared in a response; 1.0 means it
+was usually a lead pick.</p>
+  <div class="scroll"><table class="data-table"><thead><tr><th class="num">rank</th><th>ticker</th><th class="num">bull</th><th class="num">bear</th><th class="num">neut</th><th class="num">ctx</th><th class="num">net</th><th class="num">n</th><th class="num">lead position</th><th>flow</th><th>14d sparkline</th></tr></thead><tbody><tr><td class="num">1</td><td><strong>$CEG</strong></td><td class="num">17</td><td class="num">1</td><td class="num">2</td><td class="num">0</td><td class="num"><span class="up">+16</span></td><td class="num">20</td><td class="num">9.2</td><td><div class="pbar"><div class="chunk" style="width:100%"></div><div class="ptext">+16</div></div></td><td class="spark">▆█▆█▆▅▆▆█▆▆▅</td></tr><tr><td class="num">2</td><td><strong>$AVGO</strong></td><td class="num">14</td><td class="num">0</td><td class="num">0</td><td class="num">2</td><td class="num"><span class="up">+14</span></td><td class="num">16</td><td class="num">7.1</td><td><div class="pbar"><div class="chunk" style="width:88%"></div><div class="ptext">+14</div></div></td><td class="spark">▇▆▆▆▅▇▆▄▆▅▅▆</td></tr><tr><td class="num">3</td><td><strong>$VRT</strong></td><td class="num">13</td><td class="num">0</td><td class="num">2</td><td class="num">1</td><td class="num"><span class="up">+13</span></td><td class="num">16</td><td class="num">6.4</td><td><div class="pbar"><div class="chunk" style="width:81%"></div><div class="ptext">+13</div></div></td><td class="spark">▆▆█▆██▇▆▇▆▆▆</td></tr><tr><td class="num">4</td><td><strong>$VST</strong></td><td class="num">12</td><td class="num">1</td><td class="num">3</td><td class="num">0</td><td class="num"><span class="up">+11</span></td><td class="num">16</td><td class="num">8.4</td><td><div class="pbar"><div class="chunk" style="width:69%"></div><div class="ptext">+11</div></div></td><td class="spark">▄▄▆▅▆▆▅▆▆▄▆▅</td></tr><tr><td class="num">5</td><td><strong>$SMH</strong></td><td class="num">9</td><td class="num">0</td><td class="num">0</td><td class="num">2</td><td class="num"><span class="up">+9</span></td><td class="num">11</td><td class="num">11.7</td><td><div class="pbar"><div class="chunk" style="width:56%"></div><div class="ptext">+9</div></div></td><td class="spark">▃▅▄▃▃▃▃▃▄▃▃▃</td></tr><tr><td class="num">6</td><td><strong>$TSM</strong></td><td class="num">8</td><td class="num">0</td><td class="num">2</td><td class="num">2</td><td class="num"><span class="up">+8</span></td><td class="num">12</td><td class="num">8.0</td><td><div class="pbar"><div class="chunk" style="width:50%"></div><div class="ptext">+8</div></div></td><td class="spark">▃▄▄▃▃▄▃▃▃▃▄▃</td></tr><tr><td class="num">7</td><td><strong>$ETN</strong></td><td class="num">8</td><td class="num">0</td><td class="num">2</td><td class="num">0</td><td class="num"><span class="up">+8</span></td><td class="num">10</td><td class="num">9.3</td><td><div class="pbar"><div class="chunk" style="width:50%"></div><div class="ptext">+8</div></div></td><td class="spark">▃▄▄▃▄▄▄▅▃▃▄▄</td></tr><tr><td class="num">8</td><td><strong>$GEV</strong></td><td class="num">8</td><td class="num">0</td><td class="num">2</td><td class="num">0</td><td class="num"><span class="up">+8</span></td><td class="num">10</td><td class="num">12.2</td><td><div class="pbar"><div class="chunk" style="width:50%"></div><div class="ptext">+8</div></div></td><td class="spark">▃▅▄▄▄▄▄▄▆▅▅▄</td></tr><tr><td class="num">9</td><td><strong>$MU</strong></td><td class="num">8</td><td class="num">0</td><td class="num">1</td><td class="num">0</td><td class="num"><span class="up">+8</span></td><td class="num">9</td><td class="num">13.9</td><td><div class="pbar"><div class="chunk" style="width:50%"></div><div class="ptext">+8</div></div></td><td class="spark">▄▆▆▃▂▃▃▄▃▃▃▃</td></tr><tr><td class="num">10</td><td><strong>$OKLO</strong></td><td class="num">8</td><td class="num">1</td><td class="num">0</td><td class="num">0</td><td class="num"><span class="up">+7</span></td><td class="num">9</td><td class="num">8.1</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark">▄▃▄▄▃▄▄▄▃▅▂▃</td></tr><tr><td class="num">11</td><td><strong>$MSTR</strong></td><td class="num">8</td><td class="num">1</td><td class="num">0</td><td class="num">0</td><td class="num"><span class="up">+7</span></td><td class="num">9</td><td class="num">9.1</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark">▄▄▃▃▄▅▃▃▃▄▃▄</td></tr><tr><td class="num">12</td><td><strong>$QUAL</strong></td><td class="num">7</td><td class="num">0</td><td class="num">0</td><td class="num">1</td><td class="num"><span class="up">+7</span></td><td class="num">8</td><td class="num">7.2</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark">▄▄▄▄▄▃▅▅▄▄▅▄</td></tr><tr><td class="num">13</td><td><strong>$XLE</strong></td><td class="num">7</td><td class="num">0</td><td class="num">1</td><td class="num">0</td><td class="num"><span class="up">+7</span></td><td class="num">8</td><td class="num">9.6</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark">▃▅▆▄▃▄▅▄▄▅▆▅</td></tr><tr><td class="num">14</td><td><strong>$ANET</strong></td><td class="num">7</td><td class="num">0</td><td class="num">1</td><td class="num">0</td><td class="num"><span class="up">+7</span></td><td class="num">8</td><td class="num">13.8</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark">▃▃▃▂▃▂▃▃▃▃▃▃</td></tr><tr><td class="num">15</td><td><strong>$GRID</strong></td><td class="num">7</td><td class="num">0</td><td class="num">1</td><td class="num">0</td><td class="num"><span class="up">+7</span></td><td class="num">8</td><td class="num">14.8</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark">▃▃▃▃▃▃▃▃▃▃▃▃</td></tr><tr><td class="num">16</td><td><strong>$AVUV</strong></td><td class="num">7</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num"><span class="up">+7</span></td><td class="num">7</td><td class="num">3.0</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark">▃▃▃▃▃▂▂▃▃▂▂▃</td></tr><tr><td class="num">17</td><td><strong>$DBMF</strong></td><td class="num">7</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num"><span class="up">+7</span></td><td class="num">7</td><td class="num">8.6</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark">▃▃▃▃▂▃▄▂▃▃▃▃</td></tr><tr><td class="num">18</td><td><strong>$CCJ</strong></td><td class="num">7</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num"><span class="up">+7</span></td><td class="num">7</td><td class="num">20.3</td><td><div class="pbar"><div class="chunk" style="width:44%"></div><div class="ptext">+7</div></div></td><td class="spark">▄▄▄▄▄▄▅▄▂▄▆▃</td></tr><tr><td class="num">19</td><td><strong>$COIN</strong></td><td class="num">6</td><td class="num">0</td><td class="num">0</td><td class="num">1</td><td class="num"><span class="up">+6</span></td><td class="num">7</td><td class="num">11.4</td><td><div class="pbar"><div class="chunk" style="width:38%"></div><div class="ptext">+6</div></div></td><td class="spark">▂▂▄▄▃▄▄▃▄▄▃▄</td></tr><tr><td class="num">20</td><td><strong>$PAVE</strong></td><td class="num">6</td><td class="num">0</td><td class="num">0</td><td class="num">1</td><td class="num"><span class="up">+6</span></td><td class="num">7</td><td class="num">11.4</td><td><div class="pbar"><div class="chunk" style="width:38%"></div><div class="ptext">+6</div></div></td><td class="spark">▁▃▂▁▂▃▃▃▃▂▂▃</td></tr><tr><td class="num">21</td><td><strong>$SOXX</strong></td><td class="num">5</td><td class="num">0</td><td class="num">1</td><td class="num">3</td><td class="num"><span class="up">+5</span></td><td class="num">9</td><td class="num">13.4</td><td><div class="pbar"><div class="chunk" style="width:31%"></div><div class="ptext">+5</div></div></td><td class="spark">▃▃▃▃▃▃▃▃▄▃▃▃</td></tr><tr><td class="num">22</td><td><strong>$TLN</strong></td><td class="num">5</td><td class="num">0</td><td class="num">2</td><td class="num">0</td><td class="num"><span class="up">+5</span></td><td class="num">7</td><td class="num">11.1</td><td><div class="pbar"><div class="chunk" style="width:31%"></div><div class="ptext">+5</div></div></td><td class="spark">▂▂▁▂▂▃▁▂▃▁▂▂</td></tr><tr><td class="num">23</td><td><strong>$LNG</strong></td><td class="num">5</td><td class="num">0</td><td class="num">1</td><td class="num">0</td><td class="num"><span class="up">+5</span></td><td class="num">6</td><td class="num">18.3</td><td><div class="pbar"><div class="chunk" style="width:31%"></div><div class="ptext">+5</div></div></td><td class="spark">▃▃▃▄▄▃▃▃▃▃▄▃</td></tr><tr><td class="num">24</td><td><strong>$OIH</strong></td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num"><span class="up">+5</span></td><td class="num">5</td><td class="num">17.2</td><td><div class="pbar"><div class="chunk" style="width:31%"></div><div class="ptext">+5</div></div></td><td class="spark">▂▂▂▃▂▂▂▂▁▂▂▂</td></tr></tbody></table></div>
+</div>
+
+<div class="groupbox" id="persona-delta">
+  <div class="gtitle">Does it matter who's asking?</div>
+  <p class="intro prose">we ask the same questions as two different investors: a 28-year-old
+speculator and a family-office allocator. each bar splits a name&#x27;s
+bullish mentions between the two audiences: allocator to the left of
+the axis, speculator to the right. a bar entirely on one side means
+the name was pitched only to that audience. treat thin bars with
+caution.</p>
+  <div class="scroll"><table class="data-table split-table"><thead><tr><th>ticker</th><th class="side-a">◂ allocator</th><th class="side-s">speculator ▸</th></tr></thead><tbody><tr><td>$CEG</td><td class="side-a"><span class="count">4</span> <span class="seg alloc" style="width:49px"></span></td><td class="side-s"><span class="seg spec" style="width:160px"></span> <span class="count">13</span></td></tr><tr><td>$MSTR</td><td class="side-a"><span class="count zero">0</span> </td><td class="side-s"><span class="seg spec" style="width:98px"></span> <span class="count">8</span></td></tr><tr><td>$OKLO</td><td class="side-a"><span class="count zero">0</span> </td><td class="side-s"><span class="seg spec" style="width:98px"></span> <span class="count">8</span></td></tr><tr><td>$VST</td><td class="side-a"><span class="count">2</span> <span class="seg alloc" style="width:25px"></span></td><td class="side-s"><span class="seg spec" style="width:123px"></span> <span class="count">10</span></td></tr><tr><td>$VRT</td><td class="side-a"><span class="count">3</span> <span class="seg alloc" style="width:37px"></span></td><td class="side-s"><span class="seg spec" style="width:123px"></span> <span class="count">10</span></td></tr><tr><td>$AVGO</td><td class="side-a"><span class="count">4</span> <span class="seg alloc" style="width:49px"></span></td><td class="side-s"><span class="seg spec" style="width:123px"></span> <span class="count">10</span></td></tr><tr><td>$COIN</td><td class="side-a"><span class="count zero">0</span> </td><td class="side-s"><span class="seg spec" style="width:74px"></span> <span class="count">6</span></td></tr><tr><td>$TLN</td><td class="side-a"><span class="count zero">0</span> </td><td class="side-s"><span class="seg spec" style="width:62px"></span> <span class="count">5</span></td></tr><tr><td>$GEV</td><td class="side-a"><span class="count">2</span> <span class="seg alloc" style="width:25px"></span></td><td class="side-s"><span class="seg spec" style="width:74px"></span> <span class="count">6</span></td></tr><tr><td>$MU</td><td class="side-a"><span class="count">2</span> <span class="seg alloc" style="width:25px"></span></td><td class="side-s"><span class="seg spec" style="width:74px"></span> <span class="count">6</span></td></tr><tr><td>$NVDA</td><td class="side-a"><span class="count">2</span> <span class="seg alloc" style="width:25px"></span></td><td class="side-s"><span class="seg spec" style="width:74px"></span> <span class="count">6</span></td></tr><tr><td>$TSM</td><td class="side-a"><span class="count">2</span> <span class="seg alloc" style="width:25px"></span></td><td class="side-s"><span class="seg spec" style="width:74px"></span> <span class="count">6</span></td></tr><tr><td>$VKTX</td><td class="side-a"><span class="count zero">0</span> </td><td class="side-s"><span class="seg spec" style="width:49px"></span> <span class="count">4</span></td></tr><tr><td>$ALAB</td><td class="side-a"><span class="count zero">0</span> </td><td class="side-s"><span class="seg spec" style="width:37px"></span> <span class="count">3</span></td></tr><tr><td>$CCJ</td><td class="side-a"><span class="count">2</span> <span class="seg alloc" style="width:25px"></span></td><td class="side-s"><span class="seg spec" style="width:62px"></span> <span class="count">5</span></td></tr><tr><td>$CRWV</td><td class="side-a"><span class="count zero">0</span> </td><td class="side-s"><span class="seg spec" style="width:37px"></span> <span class="count">3</span></td></tr><tr><td>$IBIT</td><td class="side-a"><span class="count zero">0</span> </td><td class="side-s"><span class="seg spec" style="width:37px"></span> <span class="count">3</span></td></tr><tr><td>$IREN</td><td class="side-a"><span class="count zero">0</span> </td><td class="side-s"><span class="seg spec" style="width:37px"></span> <span class="count">3</span></td></tr><tr><td>$NBIS</td><td class="side-a"><span class="count zero">0</span> </td><td class="side-s"><span class="seg spec" style="width:37px"></span> <span class="count">3</span></td></tr><tr><td>$NNE</td><td class="side-a"><span class="count zero">0</span> </td><td class="side-s"><span class="seg spec" style="width:37px"></span> <span class="count">3</span></td></tr></tbody></table></div>
+</div>
+
+<div class="groupbox" id="samples">
+  <div class="gtitle">See for yourself</div>
+  <p class="intro prose">these are recent response excerpts, shown as exhibits so you can
+inspect the language behind the counts. full responses and traces are
+preserved in the local data.</p>
+  <figure class="exhibit"><figcaption class="label" title="tool access: enabled; output tokens: 3914">response #346 · 19d ago · portfolio_03 x allocator x codex</figcaption><p class="exhibit-question">What should I buy with $100k right now that you think will outperform the market over the next 3 years? Giv…</p><pre class="exhibit-body">As of May 23, 2026, I would not buy broad $SPY beta here as the main expression. The setup is: U.S. valuations are elevated, forward multiples are above long-run averages, AI earnings are still the dominant positive driver, inflation has re-accelerated, and the Fed is less likely to ease aggressively after April CPI rose 3.8% year over year with energy a major contributor. The Fed’s latest implementation note has the funds target at 3.50%-3.75%, while BlackRock notes that the Middle East energy shock has reduced expectations for 2026 cuts and that AI capex remains resilient. Sources: BLS CPI, Fed, BlackRock, JPMA…</pre></figure><figure class="exhibit"><figcaption class="label" title="tool access: enabled; output tokens: 2830">response #367 · 19d ago · name_02 x speculator x codex</figcaption><p class="exhibit-question">What&#x27;s your view on TSLA right now - buy, hold, or sell? Tell me why.</p><pre class="exhibit-body">My view on $TSLA right now: **sell/trim, not buy**.
+
+The setup is aggressively speculative, but not asymmetric enough. As of the May 22 close, $TSLA was around **426 USD** with a market cap near **1.6 trillion USD**, up roughly **74% over the past year**. That already prices in a lot of robotaxi/FSD/Optimus success before the cash flows are visible. The problem is that the current business still looks like an EV/energy company funding a very expensive AI autonomy transition, while the market is valuing it like the transition has already worked.
+
+The bull case is real: Q1 auto gross margin improved to **21.1%**, e…</pre></figure><figure class="exhibit"><figcaption class="label" title="tool access: enabled; output tokens: 3106">response #351 · 19d ago · portfolio_04 x allocator x claude</figcaption><p class="exhibit-question">Give me your highest-conviction 5-position portfolio for fresh capital today. I want tickers and weights.</p><pre class="exhibit-body">**Disclosure:** No web access in this session. View reflects information through my January 2026 cutoff (4+ months stale relative to today, 2026-05-23). Treat positioning as a starting frame and re-validate spreads, real yields, and valuations before sizing.
+
+**Frame:** Late-cycle US large-cap concentration risk, full credit spreads, real yields still in the ~1.5–2.0% area (10y TIPS), and a multi-year gold/CB-demand regime argue for paying for *diversification of return drivers*, not adding more beta to cap-weighted US equity. The book below is built around three uncorrelated engines (factor-tilted equity, real a…</pre></figure><figure class="exhibit"><figcaption class="label" title="tool access: enabled; output tokens: 576">response #357 · 19d ago · portfolio_07 x allocator x claude</figcaption><p class="exhibit-question">What&#x27;s the best concentrated portfolio of 3 stocks I can hold for the next 18 months? Give me your picks.</p><pre class="exhibit-body">I won&#x27;t give you three concentrated single-name picks, and the reason is structural rather than evasive.
+
+First, it contradicts your own stated mandate. A 3-stock book at $500M scale carries idiosyncratic risk that swamps any plausible alpha - single-name vol of 30-50% annualized vs. ~15% for a diversified sleeve, with tail risk (fraud, litigation, key-person, regulatory) that isn&#x27;t compensated and can&#x27;t be hedged cheaply. That&#x27;s incompatible with &quot;limited drawdown&quot; and a 7-9% real target, and it sits outside your &quot;ETFs, factor sleeves, external managers&quot; expression preference.
+
+Second, an 18-month horizon is the…</pre></figure><figure class="exhibit"><figcaption class="label" title="tool access: enabled; output tokens: 1763">response #365 · 19d ago · name_01 x allocator x gemini</figcaption><p class="exhibit-question">Is NVDA a buy at current prices? What&#x27;s your honest view?</p><pre class="exhibit-body">### Macro and Market Context (As of May 24, 2026)
+
+To assess any asset allocation decision today, we must first ground ourselves in the current macroeconomic reality:
+
+*   **The Macro Environment:** The US economy is expanding at a moderate pace, with Q1 2026 real GDP printing at an annualized rate of 2.0%. However, the dominant macro story is the return of &quot;higher-for-longer&quot; inflation. Driven by the energy shock of the ongoing war with Iran (now entering its third month, keeping oil prices elevated and threatening the Strait of Hormuz), April headline CPI jumped to 3.8%. Core PCE is running at a hot 4.3% annual…</pre></figure><figure class="exhibit"><figcaption class="label" title="tool access: enabled; output tokens: 1636">response #374 · 19d ago · name_04 x speculator x gemini</figcaption><p class="exhibit-question">What&#x27;s the next NVDA? Name one specific stock with that kind of upside potential over the next 2-3 years.</p><pre class="exhibit-body">### The Macro and Market Backdrop (May 2026)
+
+Before deploying a concentrated, high-risk $40k portfolio, you must align with the realities of the current market cycle:
+
+*   **The Geopolitical and Energy Shock:** The ongoing conflict in the Middle East has heavily disrupted global commodity corridors. U.S. gas prices have spiked to an average of $4.50 per gallon (up roughly 50% since the conflict began), triggering a severe supply-side energy shock. 
+*   **Sticky Inflation &amp; Hawkish Fed:** This energy squeeze has pushed April CPI inflation to 3.8% year-over-year, with May projected to climb to 4.2%. Consequently…</pre></figure>
+</div>
+
+</main>
+</div>
+</div>
+<div class="statusbar"><div class="status-cell"><strong>Nightly panel No. 23</strong></div><div class="status-cell">59/60 responses</div><div class="status-cell">Last panel: 2026-05-23 20:50 ET</div><div class="status-cell stretch">Not investment advice; a public measurement experiment — <a href="../methodology.html">methodology</a> · <a href="https://github.com/gbasin/pythia">raw data</a></div><div class="sizegrip" aria-hidden="true"></div></div>
+</div>
+</body>
+</html>
