@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS model_configs (
   id              INTEGER PRIMARY KEY,
   provider        TEXT    NOT NULL,           -- claude | codex | agy
   cli_command     TEXT    NOT NULL,           -- claude | codex | agy
-  model_name      TEXT    NOT NULL,           -- claude-opus-4-7 | gpt-5.5
+  model_name      TEXT    NOT NULL,           -- expected resolution at config time, e.g. claude-opus-4-8 (legs run floating "latest" aliases)
   invocation_args TEXT    NOT NULL,           -- JSON: extra CLI flags for reproducibility
   notes           TEXT
 );
@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS responses (
   persona_id          TEXT    NOT NULL,
   persona_version_hash TEXT   NOT NULL,
   model_config_id     INTEGER NOT NULL REFERENCES model_configs(id),
+  model_name_reported TEXT,                   -- model id reported in the trace — what actually served (aliases float; NULL where the trace omits it, e.g. codex)
   tools_state         TEXT    NOT NULL,       -- on | off
   raw_text            TEXT,                   -- final response text only
   raw_trace_gz        BLOB,                   -- gzipped full stream-JSON / JSONL trace

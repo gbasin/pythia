@@ -10,10 +10,13 @@ Reads the full prompt from stdin and emits JSONL events to stdout that
 parse_gemini_jsonl() in the orchestrator consumes.
 
 Event schema:
-  {"type":"init",     "model":"gemini-3.5-flash", "session_id":"<uuid>"}
+  {"type":"init",     "model":"gemini-flash-latest", "session_id":"<uuid>"}
   {"type":"grounding","sources":[{"uri":"...","title":"..."}]}
-  {"type":"result",   "tokens_in":N, "tokens_out":M, "duration_ms":N, "text":"<full>"}
+  {"type":"result",   "model":"gemini-3.5-flash", "tokens_in":N, "tokens_out":M, "duration_ms":N, "text":"<full>"}
   {"type":"error",    "message":"..."}
+
+The init event carries the requested model (possibly a floating alias);
+the result event carries the resolved model id from resp.model_version.
 
 Quota errors are surfaced with the string "RESOURCE_EXHAUSTED" so the
 orchestrator's QUOTA_EXHAUSTED_PAT trips and the provider is blocked for
@@ -35,7 +38,7 @@ def emit(event: dict) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="gemini-3.5-flash")
+    ap.add_argument("--model", default="gemini-flash-latest")
     ap.add_argument("--no-grounding", action="store_true")
     args = ap.parse_args()
 
@@ -106,6 +109,7 @@ def main() -> int:
     tokens_out = getattr(usage, "candidates_token_count", 0) or 0
     emit({
         "type": "result",
+        "model": getattr(resp, "model_version", None) or args.model,
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
         "duration_ms": elapsed_ms,

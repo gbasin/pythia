@@ -2,6 +2,13 @@
 # The orchestrator looks up entries by id, then builds an argv list using
 # `cli_command [subcommand] args...` and pipes the assembled prompt via stdin.
 #
+# Model policy: each leg runs the provider's CURRENT top model for the
+# surface via a floating alias or default (claude: `--model opus`; codex:
+# CLI built-in default; gemini: `gemini-flash-latest`). `model_name` below
+# records what that resolved to as of the last config edit; the model that
+# actually served each response is captured in
+# responses.model_name_reported (where the trace reports it).
+#
 # v1.1: tools_off variants were dropped. Both providers run with web search
 # enabled — that's the "real" surface real users get from these CLIs and
 # the only one whose recommendations are anchored in current market state.
@@ -12,7 +19,7 @@ model_configs:
     provider: claude
     cli_command: claude
     subcommand: null
-    model_name: claude-opus-4-7
+    model_name: claude-opus-4-8
     args:
       - "-p"
       - "--output-format"
@@ -37,7 +44,9 @@ model_configs:
       mode denies WebSearch in non-interactive runs. Without the
       --allowed-tools constraint, claude was firing ToolSearch / Write /
       Bash during stock-recommendation prompts (wasted turns + bloated
-      traces).
+      traces). `--model opus` floats to the newest Opus; the resolved id
+      lands in responses.model_name_reported (the alias rolled 4.7→4.8
+      on 2026-05-29 without a config change).
 
   - id: codex_gpt55
     provider: codex
@@ -59,7 +68,10 @@ model_configs:
       mutate files but can still web-search and inspect. --ephemeral so
       session files aren't persisted. --ignore-user-config + --ignore-rules
       for clean baseline. Codex's web_search is hardcoded into the engine
-      (no documented way to disable in this version).
+      (no documented way to disable in this version). No --model flag, so
+      runs the CLI's built-in default (gpt-5.5 on codex-cli 0.139.0, as of
+      2026-06); the --json event stream doesn't report the model, so
+      model_name_reported stays NULL for this leg.
 
   - id: gemini_flash
     provider: gemini
@@ -69,7 +81,7 @@ model_configs:
     args:
       - "scripts/gemini_panel_call.py"
       - "--model"
-      - "gemini-3.5-flash"
+      - "gemini-flash-latest"
     tools_state: "on"
     trace_format: gemini-jsonl
     notes: |
@@ -79,4 +91,7 @@ model_configs:
       subscription quota — added to replace agy_flash35 after the
       subscription weekly-cap lockout. Wrapper emits JSONL events parsed by
       parse_gemini_jsonl(). Grounding citations are captured in the raw
-      trace as "grounding" events for later inspection.
+      trace as "grounding" events for later inspection. `gemini-flash-latest`
+      floats to the newest stable Flash (gemini-3.5-flash as of 2026-06);
+      the wrapper reports the resolved resp.model_version, which lands in
+      responses.model_name_reported.

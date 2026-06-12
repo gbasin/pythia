@@ -14,7 +14,7 @@ Usage:
     uv run scripts/run_panel.py --dry-run      # print tuples without running
     uv run scripts/run_panel.py --limit 1      # run a single tuple
     uv run scripts/run_panel.py --prompt-id name_01 --persona-id speculator \\
-        --model-config-id claude_opus_tools_off
+        --model-config-id claude_opus
 """
 
 import argparse
@@ -143,6 +143,13 @@ def upsert_versioned(con, table: str, id_: str, version_hash: str, **fields):
         f"INSERT OR IGNORE INTO {table} ({','.join(cols)}) VALUES ({placeholders})",
         values,
     )
+
+
+def ensure_schema_migrations(con) -> None:
+    """Additive column migrations for DBs initialized from an older schema.sql."""
+    cols = {row[1] for row in con.execute("PRAGMA table_info(responses)")}
+    if "model_name_reported" not in cols:
+        con.execute("ALTER TABLE responses ADD COLUMN model_name_reported TEXT")
 
 
 def ensure_model_config(con, mc: dict) -> int:
@@ -320,6 +327,9 @@ def parse_gemini_jsonl(stdout_bytes: bytes) -> dict:
             out["session_id"] = ev.get("session_id")
             out["model_name"] = ev.get("model")
         elif et == "result":
+            # The result event carries the alias-resolved model (resp.model_version);
+            # prefer it over the requested alias from the init event.
+            out["model_name"] = ev.get("model") or out["model_name"]
             out["tokens_in"] = ev.get("tokens_in") or 0
             out["tokens_out"] = ev.get("tokens_out") or 0
             out["duration_ms"] = ev.get("duration_ms")
@@ -556,6 +566,7 @@ def main() -> int:
     DB_PATH.parent.mkdir(exist_ok=True)
     con = sqlite3.connect(DB_PATH)
     con.execute("PRAGMA foreign_keys = ON")
+    ensure_schema_migrations(con)
 
     prompt_hashes = {}
     for p in all_prompts:
@@ -659,15 +670,15 @@ def main() -> int:
         cur_insert = con.execute(
             """INSERT INTO responses (
                 run_id, prompt_id, prompt_version_hash, persona_id, persona_version_hash,
-                model_config_id, tools_state, raw_text, raw_trace_gz, trace_format,
+                model_config_id, model_name_reported, tools_state, raw_text, raw_trace_gz, trace_format,
                 trace_bytes_unz, latency_ms, tokens_in, tokens_out, cost_usd_reported,
                 session_id, refused, error, started_at, finished_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 run_id,
                 p["id"], prompt_hashes[p["id"]],
                 pe["id"], persona_hashes[pe["id"]],
-                mc_db_ids[mc["id"]], mc["tools_state"],
+                mc_db_ids[mc["id"]], result.get("model_name"), mc["tools_state"],
                 result.get("text"), trace_gz, mc["trace_format"],
                 len(result["raw_stdout"]) if result["raw_stdout"] else 0,
                 result.get("elapsed_ms"),

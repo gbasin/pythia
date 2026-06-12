@@ -2,27 +2,32 @@
 
 what frontier AI models tell people to buy, captured daily.
 
-every night at 8 PM ET, pythia asks **claude opus 4.7** (claude code CLI),
-**gpt-5.5** (codex CLI), and **gemini 3.5 flash** (Gemini API with Google
-Search grounding) to recommend stocks — across 10 prompts and two personas
+every night at 8 PM ET, pythia asks the current top model from each of
+three providers — **claude opus** (claude code CLI), **openai gpt**
+(codex CLI), and **gemini flash** (Gemini API with Google Search
+grounding) — to recommend stocks, across 10 prompts and two personas
 (an aggressive young speculator and a professional allocator), with
 tools/search available. every `$TICKER` the model emits is classified by a
 smaller LLM as **bullish**, **bearish**, **neutral**, or **context**. raw
 text + full JSON traces are gzipped and stored in SQLite. a static
 terminal-aesthetic dashboard rebuilds on every run.
 
+each leg runs the provider's "latest" alias rather than a pinned version,
+so the panel follows model releases automatically; the exact model id
+that served each response is recorded in the database.
+
 ## what this measures
 
-hundreds of millions of people now use ChatGPT and Claude as a first stop
-for investment ideas. the recommendations they receive — which names get
-praised, which get dismissed, which are repeatedly singled out as winners —
-quietly become a market force as retail follows. pythia measures this
+people increasingly ask ChatGPT and Claude what to buy. the
+recommendations they receive — which names get praised, which get
+dismissed, which are repeatedly singled out as winners — feed into
+retail flows. pythia measures this
 **recommendation flow** in public: the net bullish-minus-bearish push per
 ticker, broken down by persona and provider, over time.
 
 prompts deliberately mirror real retail queries, including ones that name
 specific tickers ("is NVDA a buy?"). the volume of recommendation those
-names receive is the signal we're capturing, not a bias to scrub.
+names receive is the signal we're capturing.
 
 ## quick start
 
@@ -174,10 +179,18 @@ pages:
   search disabled to measure training-data baselines. codex has no
   documented way to actually disable web search, so the comparison was
   asymmetric. dropped in favor of doubling the realistic tools-on signal.
+- **latest models, recorded per response.** each leg floats with the
+  provider's newest model (claude's `opus` alias, codex's CLI default,
+  `gemini-flash-latest`) instead of pinning a version — when a provider
+  ships a new model, the panel picks it up on the next nightly run. the
+  model id that actually served each response is stored in
+  `responses.model_name_reported`, so model eras can be separated in
+  analysis.
 - **LLM-as-judge for sentiment**, not regex. real responses have nuance
   ("$NVDA is exceptional but I'd wait for a pullback") that keyword
-  matching mangles. claude haiku 4.5 reads each response and labels each
-  ticker as bullish / bearish / neutral / context.
+  matching mangles. claude haiku (the `haiku` alias, again floating with
+  releases) reads each response and labels each ticker as bullish /
+  bearish / neutral / context.
 - **`$TICKER` format directive in the preamble.** makes extraction
   deterministic — a single regex `\$[A-Z]{1,5}\b` catches every mention.
   compliance has been ~100% so far.
@@ -188,9 +201,12 @@ everything lives in `db/panel.sqlite`. schema highlights:
 
 - `runs` — one per panel invocation
 - `prompts`, `personas` — versioned by content hash (edits don't break old data)
-- `model_configs` — one per model surface
+- `model_configs` — one per model surface; `model_name` is the expected
+  model at config time (a new row appears whenever the config changes)
 - `responses` — `raw_text` + `raw_trace_gz BLOB` (gzipped full JSONL) +
-  tokens, latency, session_id
+  tokens, latency, session_id, and `model_name_reported` — the model id
+  the trace reported, i.e. what the floating alias actually resolved to
+  (NULL for codex, whose event stream omits it)
 - `mentions` — one row per unique ticker per response, with classifier
   `sentiment_hint` ∈ {bullish, bearish, neutral, context} and 1-indexed
   `position`
