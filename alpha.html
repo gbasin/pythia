@@ -494,6 +494,7 @@ td.side-s, th.side-s { border-left: 2px solid var(--axis-split); }
 .score-side { display: flex; flex-direction: column; gap: 8px; }
 .stat-frame { border: 1px solid var(--frame); border-radius: 2px; background: var(--base); padding: 10px 12px; }
 .stat-num { font-size: 21px; font-weight: 700; }
+.stat-split { margin-top: 3px; font-size: 12px; font-weight: 600; color: var(--dim); }
 .stat-rest { margin-top: 6px; font-size: 11.5px; color: var(--dim); line-height: 1.45; }
 .source { font-size: 10.5px; color: var(--zero); margin-top: 6px; }
 .qbutton {
@@ -640,7 +641,7 @@ details .details-body { margin: 8px 0 0 14px; max-width: 90ch; font-size: 12px; 
 </div>
 <div class="groupbox" id="headline">
   <div class="gtitle">Scoreboard</div>
-  <div class="stat-num down">-0.79% vs QQQ</div><p class="stat-rest">cumulative excess of the nightly top-20 basket over QQQ across 15 sessions, next open to close; not yet statistically significant.</p>
+  <div class="stat-num down">-0.79% vs QQQ</div><div class="stat-split">top-20 <span class="up">+2.70%</span> · QQQ <span class="up">+3.49%</span></div><p class="stat-rest">cumulative excess of the nightly top-20 basket over QQQ across 15 sessions, next open to close; not yet statistically significant.</p>
 </div>
 <div class="groupbox" id="definition">
   <div class="gtitle">Benchmark definition — what is being measured</div>
