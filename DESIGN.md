@@ -1,100 +1,111 @@
 # DESIGN.md: pythia
 
-Direction: **paper datasheet**. A dated engineering document on warm paper,
-all monospace, set on a true character grid. Lineage: Berkeley Graphics /
-US Graphics datasheets, Oxide's mono discipline, Economist chart rules.
-Light is canonical; dark ships as a secondary `prefers-color-scheme` palette.
+Direction: **Qt desktop app**. The whole site renders as a single desktop
+application window — Qt Widgets, Fusion style — sitting on a dark desktop
+backdrop. Lineage: Qt Fusion (light + dark palettes), classic
+QTableView/QGroupBox density, Bloomberg-terminal-adjacent data chrome.
+Light is canonical; dark ships as a Fusion-dark `prefers-color-scheme`
+palette. Built as its own palette; do not invert.
 
-## Color
+(The previous paper-datasheet direction was retired 2026-06-12; this
+replaced it wholesale.)
 
-OKLCH only. Never #000 or #fff. Budget: ground + ink + two grays + one accent
-+ two semantic deltas. Nothing else.
+## The window metaphor
 
-Light (canonical, "paper"):
+Every page is the same app window:
 
-- `--paper`:  oklch(0.96 0.008 90)   warm off-white ground
-- `--ink`:    oklch(0.24 0.012 90)   warm near-black text
-- `--dim`:    oklch(0.47 0.012 90)   secondary text (passes 4.5:1 on paper)
-- `--faint`:  oklch(0.87 0.008 90)   hairlines, gridlines; never used as text
-- `--accent`: oklch(0.60 0.12 70)    ochre stamp ink; ritual marks only
-                                     (top rules, the panel number, links)
-- `--up`:     oklch(0.48 0.10 245)   blue, bullish/positive
-- `--down`:   oklch(0.48 0.13 20)    claret, bearish/negative
+- **Title bar**: app icon + window title (together a home link back to
+  the index — the Qt heir to the wordmark link) + decorative
+  min/max/close. Title carries the page identity ("Pythia — Nightly
+  Panel No. N — date", "Pythia — Trends", "Pythia — Session <date>").
+  No menu bar: a File/Edit row would be all dead entries, and dead
+  controls are banned.
+- **Toolbar**: real controls only — ◀ / date combo (a styled `<select>`
+  with a one-line `onchange` redirect, the site's only JS) / ▶ for session
+  navigation, Raw data link, About link. No dead buttons.
+- **Sessions dock** (left): QListView of clean nights, newest first,
+  selected row in highlight blue. Hidden below 900px.
+- **Tab bar**: Overview / Trends / Scoreboard / Methodology = the four
+  pages. A day page opens as a closable document tab next to Overview
+  ("2026-06-11 ✕"); the ✕ closes the session back to the index, and
+  Overview stays clickable. Never render the current page's escape
+  hatch as a dead active tab.
+- **Status bar**: sunken cells — panel number, responses ok/total, last
+  panel time, the not-investment-advice line with methodology/raw-data
+  links — plus a size grip. `position: sticky; bottom: 0`.
 
-Dark (secondary): ground oklch(0.19 0.008 90), text oklch(0.89 0.01 90),
-desaturate accent and deltas one step; hairlines oklch(0.30 0.008 90).
-Build it as its own palette; do not invert.
+Content lives in QGroupBoxes: 1px frame, floating bold 12px title over
+the border. Section headers, labels, and "h2" prose headers all fold into
+group-box titles ("Flow — night of 2026-06-12 (net = bullish − bearish
+across 60 responses)").
 
-Rules: red/green is banned as the only encoding; deltas always carry +/- signs
-so hue is redundant. Color the 3-5 tickers the story is about; gray the rest.
+## Palette
+
+Hex, Fusion-derived, all swappable via CSS custom properties.
+
+Light (canonical): window `#efefef`, base `#ffffff`, alternate `#f6f6f6`,
+text `#1c1c1c`, dim `#6b6b6b`, frame `#b4b4b4`, highlight `#308cc6`,
+up `#1d6fa5`, down `#b3261e`, link `#0a66b8`.
+
+Dark (Fusion dark): window `#353535`, base `#232323`, alternate `#2b2b2b`,
+text `#d8d8d8`, highlight `#2a82da`, up `#6ab0e8`, down `#e57368`.
+
+Backdrop: dark radial gradient desktop behind the window in both schemes.
+Deltas always carry +/- signs so hue stays redundant.
 
 ## Typography
 
-- One family: JetBrains Mono (box-drawing stays connected at 120%+ line
-  height), fallback ui-monospace stack. Berkeley Mono is the upgrade path if
-  purchased; nothing else changes.
-- `font-variant-numeric: tabular-nums lining-nums` globally. Non-negotiable.
-- Three sizes only: 12px labels (uppercase, +0.08em tracking), 14px body/data,
-  21px section display. Hierarchy beyond that is weight (400/700) and dimming
-  (`--dim`), never more sizes.
-- Prose measure capped at 72ch.
+- UI text: system stack (`Segoe UI, Helvetica Neue, Cantarell, Ubuntu`),
+  13px base, 12px in tables/controls, 11px status/captions. Desktop-app
+  small.
+- Data still respects `font-variant-numeric: tabular-nums lining-nums`.
+- JetBrains Mono survives only where it earns it: sparklines, sample
+  response bodies, methodology `<pre>` blocks.
+- Table headers `text-transform: capitalize`, 600 weight, gradient fill.
 
-## Grid and layout
+## Widgets
 
-- Character grid: cell = 1ch x var(--lh) where --lh: 1.5rem (21px). Every
-  box height and vertical margin is a whole multiple of --lh.
-- Page width in characters, stepping down whole columns:
-  `max-width: calc(min(100ch, round(down, 100%, 1ch)))`. This is also the
-  mobile strategy: columns drop, nothing clips, no horizontal scroll at 390px.
-- Section gaps generous (3-4 line units); rhythm varies, padding is not
-  uniform. No cards, no nested containers. Structure comes from rules:
-  a 2px accent top rule opens a section, 1px `--faint` hairlines divide rows.
-- Document frame: masthead carries the dek and the panel number / timestamp
-  block; every chart and table closes with a source line in `--dim`
-  ("Source: nightly model runs - prices via yfinance - as of <date>").
-
-## Charts
-
-- Time series are inline SVG (build-time generated, no JS), styled to the
-  grid: horizontal gridlines only (3-5, `--faint`), no y-axis line, y labels
-  right-aligned above gridlines, solid baseline only, direct labels at line
-  ends (never legends), marked zero line, `vector-effect: non-scaling-stroke`,
-  axis text in 12px mono tabular-nums.
-- QQQ is always the gray reference line; the basket takes a semantic color.
-- Unicode bars and sparklines live only inside tables (block elements
-  : U+2581-2588, dot for absent days), sized in ch so they sit on the grid.
-  They never appear as a standalone hero chart.
-- The pipeline strip is the one status visual: one square per night
-  (filled ran / open missed / dotted excluded).
+- **Tables** are QTableViews: gradient header cells with 1px separators,
+  alternating row colors, hover row highlight, 1px sunken frame, dense
+  3px/8px cell padding.
+- **Flow bars** are QProgressBars: 1px border, blue gradient chunk
+  (red for negative net), signed value centered over the bar.
+- **Persona split** is a diverging widget bar around a 2px center axis:
+  gray allocator segments grow left, blue speculator segments grow right.
+- **Charts** sit in a sunken white plot frame with a legend row (swatch +
+  label, top-left). Gridlines light gray, dashed zero line, models line
+  2px in up/down color, QQQ 1.4px gray. Inline SVG, build-time, no JS.
+- **Record strip** is LED squares: filled blue = ran, open = missed,
+  half-filled = excluded. Squares link to day pages.
+- **Sample responses** are read-only text areas: framed white boxes with
+  a gradient header strip (response id · age · prompt × persona ×
+  provider), mono body.
+- **Sparklines** stay unicode block glyphs (U+2581-2588, `·` for absent),
+  11px mono, gray.
 
 ## Motion
 
-Essentially none. Native `details` disclosure, CSS :hover color shifts
-(ease-out, <150ms). No typewriter effects, no cursors, no scanlines, no
-entrance animations.
-
-## Components
-
-- **Masthead**: PYTHIA wordmark, two-line dek, right-aligned stamp block
-  (NIGHTLY PANEL No. N, date/time ET, responses ok/total).
-- **Flow table** (hero): ticker, signed net, bar in ch units, 14d sparkline;
-  one written insight sentence beneath it.
-- **Scoreboard band**: compact SVG curve vs QQQ + one number with units and
-  session count, caveat inline ("not yet significant" while n is small).
-- **Data tables**: 1px `--faint` row rules, header row 700 over hairline,
-  numbers right-aligned, text left-aligned, bars-in-cells welcome.
-- **Day nav**: character strip, current night in accent, never scrolls the
-  current day out of view.
+Essentially none. Hover states on buttons/tabs/rows/menu items, native
+`details` disclosure (▸/▾). No transitions, no entrance animations.
 
 ## Bans
 
-Side-stripe borders, gradient text, glassmorphism, hero-metric cards, gauges,
-pies, dual y-axes, legends where direct labels fit, vertical gridlines,
-em dashes in copy, green-on-black, CRT cosplay of any kind.
+Dead controls that look clickable but go nowhere (decorative chrome must
+be `aria-hidden` and obviously inert: window buttons, dock glyphs; this
+ban is why there is no menu bar). Rounded-blob cards, glassmorphism, gradient text, pies, gauges,
+dual y-axes, em dashes in copy. No flat-web aesthetics inside the window:
+if an element exists, it should look like a Qt widget.
 
 ## Accessibility floor
 
-All text contrast >= 4.5:1 against its ground (this killed the old #7a766b
-dim and #1a1a1a-as-text). Hue never the only encoding. SVG charts carry
-role="img" + aria-label stating the headline value. OG/meta/favicon present
-on every page so link previews carry the dek.
+Text contrast >= 4.5:1 against its ground in both palettes. Hue never the
+only encoding (signs on every delta). SVG charts carry role="img" +
+aria-label with the headline value. Decorative chrome aria-hidden; the
+tab bar and dock are real links. OG/meta/favicon present on every page.
+
+## Mobile (< 900px)
+
+Window goes full-bleed (no backdrop, border, or shadow), dock hides
+(toolbar combo still navigates sessions), teaser grid and scoreboard
+stack to one column, sparkline column drops from the flow table, progress
+bars shrink to 120px. Wide tables scroll inside `.scroll` wrappers.
