@@ -2086,7 +2086,7 @@ def render_toolbar(current: str, days: list[str], root_prefix: str = "") -> str:
         f'onchange="if(this.value)location.href=this.value">{options}</select>'
         + nav_btn(newer, "▶", "next night")
         + '<div class="tsep"></div>'
-        + f'<a class="tbtn" href="https://{html.escape(REPO_URL)}">⇩ Raw data</a>'
+        + f'<a class="tbtn" href="https://{html.escape(REPO_URL)}">&lt;/&gt; Open source code</a>'
         + '<div class="tspacer"></div>'
         + f'<a class="tbtn" href="{html.escape(root_prefix)}methodology.html" '
         f'title="{html.escape(DEK)}">ⓘ About this experiment</a>'
@@ -2128,7 +2128,7 @@ def render_statusbar(d: dict, panel_no: int, root_prefix: str = "") -> str:
         f'<div class="status-cell">Last panel: {html.escape(stamp_time)}</div>'
         '<div class="status-cell stretch">Not investment advice; a public measurement experiment — '
         f'<a href="{html.escape(root_prefix)}methodology.html">methodology</a> · '
-        f'<a href="https://{html.escape(REPO_URL)}">raw data</a></div>'
+        f'<a href="https://{html.escape(REPO_URL)}">open source code</a></div>'
         '<div class="sizegrip" aria-hidden="true"></div>'
         '</div>'
     )
