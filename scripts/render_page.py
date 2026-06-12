@@ -16,6 +16,7 @@ how it works → operational.
 
 import html
 import os
+import random
 import shutil
 import sqlite3
 import textwrap
@@ -183,8 +184,10 @@ was usually a lead pick."""
 
 INTRO_PERSONA_DELTA = """\
 we ask the same questions as two different investors: a 28-year-old
-speculator and a family-office allocator. delta shows which names the
-models route toward one audience more than the other."""
+speculator and a family-office allocator. delta is the raw mention gap
+between the two audiences; skew divides that gap by the ticker's total
+mentions, so a +100% skew means a name pitched only to the speculator.
+treat skew on thinly mentioned names with caution."""
 
 
 INTRO_SAMPLES = """\
@@ -531,6 +534,7 @@ def fetch(con, day: str | None = None) -> dict:
         """
     ).fetchall()
 
+    day_pred2 = day_pred.replace("ru.", "ru2.")
     samples = con.execute(
         f"""
         SELECT r.id            AS resp_id,
@@ -549,11 +553,44 @@ def fetch(con, day: str | None = None) -> dict:
         JOIN runs ru ON r.run_id = ru.id
         WHERE r.error IS NULL AND r.raw_text IS NOT NULL AND LENGTH(r.raw_text) > 100
               AND ru.is_clean = 1 {day_pred}
-        ORDER BY r.id DESC
-        LIMIT 6
+              AND r.run_id = (
+                  SELECT MAX(r2.run_id) FROM responses r2
+                  JOIN runs ru2 ON r2.run_id = ru2.id
+                  WHERE r2.error IS NULL AND ru2.is_clean = 1 {day_pred2}
+              )
+        ORDER BY r.id
         """,
-        day_params,
+        day_params + day_params,
     ).fetchall()
+
+    # A stable pseudo-random spread across the run: shuffle with a seed
+    # derived from the run, then prefer unseen prompts and balanced
+    # providers so six exhibits show six different questions.
+    samples = list(samples)
+    if samples:
+        rng = random.Random(f"{day or 'latest'}:{len(samples)}")
+        rng.shuffle(samples)
+        picked, seen_prompts, provider_counts = [], set(), {}
+        for s in samples:
+            if len(picked) >= 6:
+                break
+            if s["prompt_id"] in seen_prompts or provider_counts.get(s["provider"], 0) >= 2:
+                continue
+            picked.append(s)
+            seen_prompts.add(s["prompt_id"])
+            provider_counts[s["provider"]] = provider_counts.get(s["provider"], 0) + 1
+        for s in samples:
+            if len(picked) >= 6:
+                break
+            if s["prompt_id"] not in seen_prompts:
+                picked.append(s)
+                seen_prompts.add(s["prompt_id"])
+        for s in samples:
+            if len(picked) >= 6:
+                break
+            if all(p["resp_id"] != s["resp_id"] for p in picked):
+                picked.append(s)
+        samples = picked
 
     samples_enriched = []
     for s in samples:
@@ -905,7 +942,8 @@ def render_alpha_svg(alpha: dict, width: int = 900, height: int = 220,
         grid.append(f'<text x="{left}" y="{y - 4:.1f}" text-anchor="start">{v * 100:+.1f}%</text>')
     if all(abs(v) >= (hi - lo) / 1000 for v in grid_values):
         grid.append(f'<line x1="{left}" y1="{zero_y:.1f}" x2="{width - right}" y2="{zero_y:.1f}" class="zero-line"/>')
-    baseline_y = y_at(lo)
+        if all(abs(zero_y - y_at(v)) > 14 for v in grid_values):
+            grid.append(f'<text x="{left}" y="{zero_y - 4:.1f}" text-anchor="start">0%</text>')
     label_x = min(width - 4, x_at(len(model_values) - 1) + 8)
     # direct labels sit at each line's end; push them apart when the lines
     # converge so the two words never overprint
@@ -922,7 +960,6 @@ def render_alpha_svg(alpha: dict, width: int = 900, height: int = 220,
     )
     return f"""<svg class="alpha-svg" viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(aria)}" style="--chart-models: {color_var}">
   {"".join(grid)}
-  <line x1="{left}" y1="{baseline_y:.1f}" x2="{width - right}" y2="{baseline_y:.1f}" class="baseline"/>
   <polyline points="{qqq_points}" fill="none" class="qqq-line"/>
   <polyline points="{model_points}" fill="none" class="models-line"/>
   <text x="{label_x:.1f}" y="{model_label_y:.1f}" class="direct-label models-label">models</text>
@@ -991,18 +1028,27 @@ def render_persona_delta(d: dict) -> str:
         '<div class="scroll"><table class="data-table">',
         "<thead><tr><th>ticker</th><th class=\"num\">speculator</th>"
         "<th class=\"num\">allocator</th><th class=\"num\">delta</th>"
+        "<th class=\"num\">skew</th>"
         "</tr></thead><tbody>",
     ]
     for r in rows[:20]:
         spec = r["spec_n"] or 0
         alloc = r["alloc_n"] or 0
         delta = spec - alloc
+        total = spec + alloc
+        if total:
+            skew = round(100 * delta / total)
+            cls = "up" if skew > 0 else "down" if skew < 0 else "zero"
+            skew_cell = f'<span class="{cls}">{skew:+d}%</span>'
+        else:
+            skew_cell = '<span class="zero">n/a</span>'
         out.append(
             "<tr>"
             f'<td>${html.escape(r["ticker"])}</td>'
             f'<td class="num">{spec}</td>'
             f'<td class="num">{alloc}</td>'
             f'<td class="num">{signed_span(delta)}</td>'
+            f'<td class="num">{skew_cell}</td>'
             "</tr>"
         )
     out.append("</tbody></table></div>")
@@ -1385,8 +1431,7 @@ details .details-body { margin-top: var(--lh); max-width: 72ch; color: var(--dim
 .alpha-svg { width: 100%; height: auto; display: block; }
 .alpha-svg text { font: 12px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; fill: var(--dim); }
 .alpha-svg .grid { stroke: var(--faint); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.alpha-svg .baseline { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.alpha-svg .zero-line { stroke: var(--dim); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.alpha-svg .zero-line { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .alpha-svg .models-line { stroke: var(--chart-models, var(--up)); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .alpha-svg .qqq-line { stroke: var(--dim); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
 .alpha-svg .direct-label { font-weight: 700; fill: var(--ink); }
@@ -1659,7 +1704,7 @@ def compute_insight(con, latest_day: str) -> str:
     if rows:
         names = [f"${r['ticker']}" for r in rows]
         joined = names[0] if len(names) == 1 else f"{names[0]} and {names[1]}"
-        clauses.append(f"{joined} entered the flow for the first time tonight")
+        clauses.append(f"{joined} entered the flow for the first time")
 
     leaders = [dict(r) for r in con.execute(
         """
@@ -1692,9 +1737,9 @@ def compute_insight(con, latest_day: str) -> str:
         if streak >= 2:
             clauses.append(f"${lead['ticker']} leads for the {ordinal(streak)} straight night")
     if not clauses and lead:
-        clauses.append(f"${lead['ticker']} leads tonight's flow at {signed_int(lead['net'] or 0)}")
+        clauses.append(f"${lead['ticker']} leads the night's flow at {signed_int(lead['net'] or 0)}")
     if not clauses:
-        clauses.append("the panel logged no positive flow tonight")
+        clauses.append("the panel logged no positive flow this night")
     return "; ".join(clauses) + "."
 
 
@@ -1756,7 +1801,7 @@ def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[s
     score_stat = render_scoreboard_stat(alpha)
     content = f"""
 <section id="flow">
-  <div class="label">TONIGHT'S FLOW · {html.escape(day)} · net = bullish − bearish mentions across 60 responses</div>
+  <div class="label">FLOW · NIGHT OF {html.escape(day)} · net = bullish − bearish mentions across 60 responses</div>
   {render_flow_table(d, day)}
   <p class="insight">{html.escape(insight)}</p>
 </section>
@@ -1794,7 +1839,7 @@ def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[s
 <details>
   <summary>terms</summary>
   <div class="details-body">
-    <p>net means bullish mentions minus bearish mentions. flow is the ranked push models gave tickers tonight. first sighting means the first night a ticker appeared in the logged panel. consensus means more than one provider pushed the same ticker bullish.</p>
+    <p>net means bullish mentions minus bearish mentions. flow is the ranked push models gave tickers on the night shown. first sighting means the first night a ticker appeared in the logged panel. consensus means more than one provider pushed the same ticker bullish.</p>
   </div>
 </details>
 """
@@ -1814,7 +1859,7 @@ def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
     root_prefix = "../" if not is_index else ""
     content = f"""
 <section id="flow">
-  <div class="label">TONIGHT'S FLOW · {html.escape(day)} · net = bullish − bearish mentions across 60 responses</div>
+  <div class="label">FLOW · NIGHT OF {html.escape(day)} · net = bullish − bearish mentions across 60 responses</div>
   {render_flow_table(d, day)}
 </section>
 
