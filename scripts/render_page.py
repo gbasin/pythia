@@ -980,11 +980,6 @@ def no_emdash(text: str) -> str:
     return (text or "").replace("\u2014", "-")
 
 
-def signed_span(n: int) -> str:
-    cls = "up" if n > 0 else "down" if n < 0 else "zero"
-    return f'<span class="{cls}">{n:+d}</span>'
-
-
 # ───────────────────────── section renderers ─────────────────────────
 
 
@@ -999,13 +994,12 @@ def render_top_mentions(d: dict) -> str:
         "<th class=\"num\">rank</th><th>ticker</th>"
         "<th class=\"num\">bull</th><th class=\"num\">bear</th>"
         "<th class=\"num\">neut</th><th class=\"num\">ctx</th>"
-        "<th class=\"num\">net</th><th class=\"num\">n</th>"
-        "<th class=\"num\">lead position</th><th>flow</th><th>14d sparkline</th>"
+        "<th class=\"num\">n</th>"
+        "<th class=\"num\">lead position</th><th>net</th><th>14d sparkline</th>"
         "</tr></thead><tbody>",
     ]
     for i, r in enumerate(rows, start=1):
         net = r["net"] or 0
-        cls = "up" if net > 0 else "down" if net < 0 else "zero"
         out.append(
             "<tr>"
             f'<td class="num">{i}</td>'
@@ -1014,7 +1008,6 @@ def render_top_mentions(d: dict) -> str:
             f'<td class="num">{r["bear"] or 0}</td>'
             f'<td class="num">{r["neut"] or 0}</td>'
             f'<td class="num">{r["ctx"] or 0}</td>'
-            f'<td class="num">{signed_span(net)}</td>'
             f'<td class="num">{r["n"] or 0}</td>'
             f'<td class="num">{(r["avg_pos"] or 0):.1f}</td>'
             f'<td>{pbar_html(net, max_abs_net)}</td>'
@@ -1176,8 +1169,8 @@ def render_rolling_top(rows: list[dict], window_label: str) -> str:
         '<div class="scroll"><table class="data-table">',
         "<thead><tr>",
         "<th class=\"num\">rank</th><th>ticker</th>",
-        "<th class=\"num\">bull</th><th class=\"num\">bear</th><th class=\"num\">net</th>",
-        f"<th>flow</th><th class=\"spark\">{html.escape(spark_header)}</th>",
+        "<th class=\"num\">bull</th><th class=\"num\">bear</th>",
+        f"<th>net</th><th class=\"spark\">{html.escape(spark_header)}</th>",
         "</tr></thead><tbody>",
     ]
     for i, r in enumerate(rows, start=1):
@@ -1188,7 +1181,6 @@ def render_rolling_top(rows: list[dict], window_label: str) -> str:
             f"<td><strong>${html.escape(r['ticker'])}</strong></td>"
             f"<td class=\"num\">{r.get('bull') or 0}</td>"
             f"<td class=\"num\">{r.get('bear') or 0}</td>"
-            f"<td class=\"num\">{signed_int_span(net)}</td>"
             f"<td>{pbar_html(net, max_abs_net)}</td>"
             f"<td class=\"spark\">{html.escape(r.get('sparkline') or '')}</td>"
             "</tr>"
@@ -2186,15 +2178,13 @@ def render_flow_table(d: dict, day: str) -> str:
     max_abs_net = max((abs(r["net"] or 0) for r in rows), default=1) or 1
     out = [
         '<div class="table-scroll"><table class="flow-table">',
-        '<thead><tr><th>ticker</th><th class="num">net</th><th>flow</th><th class="spark-col">14d</th></tr></thead><tbody>',
+        '<thead><tr><th>ticker</th><th>net</th><th class="spark-col">14d</th></tr></thead><tbody>',
     ]
     for r in rows:
         net = r["net"] or 0
-        cls = "up" if net > 0 else "down" if net < 0 else "zero"
         out.append(
             '<tr>'
             f'<td class="ticker">${html.escape(r["ticker"])}</td>'
-            f'<td class="num {cls}">{signed_int(net)}</td>'
             f'<td>{pbar_html(net, max_abs_net)}</td>'
             f'<td class="spark spark-col">{html.escape(r.get("sparkline") or "")}</td>'
             '</tr>'

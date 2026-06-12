@@ -23,11 +23,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -138,6 +139,30 @@ def alpha_lag_sessions(con) -> tuple[int, str | None, str | None]:
         ).fetchall()
     ]
     return len(sessions), fwd, (sessions[-1] if sessions else None)
+
+
+def latest_dashboard_day(con) -> str | None:
+    """The newest day the dashboard would render, using the same EST-offset
+    day key as render_page.py."""
+    return con.execute(
+        "SELECT MAX(DATE(started_at, '-5 hours')) AS d FROM runs WHERE is_clean=1"
+    ).fetchone()["d"]
+
+
+def published_day(url: str) -> tuple[str | None, str | None]:
+    """(day, error) — the YYYY-MM-DD in the live dashboard's <title>, or an
+    error description when the fetch or parse fails."""
+    req = urllib.request.Request(
+        url, headers={"Cache-Control": "no-cache", "User-Agent": "pythia-health"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            html = resp.read(65536).decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001 — any fetch failure is the finding
+        return None, str(e)
+    m = re.search(r"<title>pythia: (\d{4}-\d{2}-\d{2})</title>", html)
+    if not m:
+        return None, "no '<title>pythia: YYYY-MM-DD</title>' in response"
+    return m.group(1), None
 
 
 def baseline_mentions_rate(con, exclude_run_id: int, days: int) -> float:
@@ -256,6 +281,33 @@ def run_checks(con, cfg: dict) -> list[Finding]:
                     f"({age_days:.1f} calendar days ago, threshold "
                     f"{c.get('max_age_days', 5)}d). The price fetch may be down "
                     f"(yfinance) or benchmark_alpha is not running."))
+
+    # Published dashboard staleness — the GitHub Pages push failing while
+    # everything upstream stays green.
+    if "pages_stale" in checks:
+        c = checks["pages_stale"]
+        sev = c.get("severity", "warn")
+        url = c.get("url", "https://gbasin.github.io/pythia/")
+        live, err = published_day(url)
+        db_day = latest_dashboard_day(con)
+        if err is not None:
+            findings.append(Finding(
+                "pages_unreachable", sev,
+                "published dashboard unreachable or unparseable",
+                f"GET {url} did not yield a dashboard day: {err}. The Pages "
+                f"site may be down or disabled, or the index title format "
+                f"changed (this check parses '<title>pythia: YYYY-MM-DD"
+                f"</title>')."))
+        elif db_day:
+            behind = (date.fromisoformat(db_day) - date.fromisoformat(live)).days
+            if behind > c.get("max_behind_days", 1):
+                findings.append(Finding(
+                    "pages_stale", sev,
+                    f"published dashboard stale: live shows {live}, db has {db_day}",
+                    f"{url} is {behind} days behind the database (threshold "
+                    f"{c.get('max_behind_days', 1)}d). The gh-pages push is "
+                    f"failing — check the 'publishing dashboard' stage in the "
+                    f"panel logs and run scripts/publish_pages.sh manually."))
 
     # Classifier needs_review rate.
     if "classifier_needs_review" in checks and n_mentions:
