@@ -1835,8 +1835,9 @@ def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[s
   </section>
 </div>
 
-<section id="pipeline">
-  <h2>PIPELINE</h2>
+<section id="nights">
+  <h2>NIGHTS RECORDED</h2>
+  <div class="label">ONE SQUARE PER NIGHT · FILLED = PANEL RAN · OPEN = MISSED</div>
   {render_pipeline(con)}
 </section>
 
@@ -2051,7 +2052,10 @@ def render_methodology_page(d: dict, days: list[str], preamble: str, assembled_o
   <div class="scroll method-block"><pre>{html.escape(no_emdash(assembled_on))}</pre></div>
   <h3>preamble</h3>
   <div class="scroll method-block"><pre>{html.escape(no_emdash("  " + preamble.replace(chr(10), chr(10) + "  ") if preamble else "missing"))}</pre></div>
-  <h3>personas</h3>
+</section>
+
+<section id="personas">
+  <h2>THE 2 PERSONAS</h2>
   <p class="prose">{html.escape(personas_note)}</p>
   <div class="scroll method-block"><pre>{html.escape(render_personas(d))}</pre></div>
 </section>
