@@ -5,10 +5,8 @@
 
 # Global preamble — applied to every prompt (after the persona, before the
 # question). Forces the model to ground its recommendations in current
-# market/macro/geopolitical state rather than training-data defaults.
-# Critical for the tools-on vs tools-off delta analysis: both states see the
-# same instruction; the gap measures how much web search actually changes
-# the recommendation set.
+# market/macro/geopolitical state rather than training-data defaults, and
+# pins the $TICKER output format that makes extraction deterministic.
 preamble: |
   Before recommending anything, take stock of the current state of markets
   (valuations, recent moves, earnings cycle), the macro environment (rates,

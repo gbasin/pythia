@@ -33,8 +33,16 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-DB = ROOT / "db" / "panel.sqlite"
+DB = Path(os.environ.get("PYTHIA_DB_PATH", ROOT / "db" / "panel.sqlite"))
 CONFIG = ROOT / "health_checks.yaml"
+
+
+def gh_repo(cfg: dict) -> str | None:
+    """GitHub repo slug for issue filing, from the env var named in config.
+    Returns None (transport skipped) when unset, so cloners don't file
+    issues into someone else's repo."""
+    t = cfg["transports"].get("gh_issue", {})
+    return os.environ.get(t.get("repo_env", "PYTHIA_HEALTH_REPO"))
 
 
 @dataclass
@@ -303,7 +311,7 @@ def open_issue_keys(cfg: dict) -> set[str]:
     t = cfg["transports"]["gh_issue"]
     try:
         r = _gh(["issue", "list", "--state", "open", "--label", t["label"],
-                 "--json", "body", "--limit", "100"], t["repo"])
+                 "--json", "body", "--limit", "100"], gh_repo(cfg))
         if r.returncode != 0:
             print(f"  gh: list failed: {r.stderr.strip()}")
             return set()
@@ -330,7 +338,7 @@ def file_issue(cfg: dict, finding: Finding, existing: set[str]) -> bool:
     try:
         r = _gh(["issue", "create",
                  "--title", f"[health] {finding.title}",
-                 "--body", body, "--label", t["label"]], t["repo"])
+                 "--body", body, "--label", t["label"]], gh_repo(cfg))
         if r.returncode != 0:
             print(f"  gh: create failed ({finding.key}): {r.stderr.strip()}")
             return False
@@ -344,6 +352,9 @@ def file_issue(cfg: dict, finding: Finding, existing: set[str]) -> bool:
 def route(cfg: dict, findings: list[Finding], dry_run: bool) -> None:
     existing = set()
     gh_enabled = cfg["transports"].get("gh_issue", {}).get("enabled")
+    if gh_enabled and not gh_repo(cfg):
+        print("  gh: skipped (repo env unset)")
+        gh_enabled = False
     if gh_enabled and not dry_run:
         existing = open_issue_keys(cfg)
 

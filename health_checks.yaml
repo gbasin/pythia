@@ -56,5 +56,9 @@ transports:
     server: https://ntfy.sh
   gh_issue:
     enabled: true
-    repo: gbasin/pythia
+    # Repo slug ("owner/name") is read from this env var (set yours in .env).
+    # If unset, issue filing is skipped — so cloning and running this never
+    # files issues into someone else's repo. The label must exist on the
+    # repo (`gh label create pythia-health`).
+    repo_env: PYTHIA_HEALTH_REPO
     label: pythia-health

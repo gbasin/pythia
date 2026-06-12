@@ -336,6 +336,10 @@ def cache_prices(con: sqlite3.Connection, tickers: list[str], start: date, end: 
               f"({len(universe)} tickers)")
         return
 
+    # yfinance treats `end` as exclusive; make sure the fetch window is at
+    # least one day wide even if a ticker's cache reaches end-1.
+    stale_start = min(stale_start, end - timedelta(days=1))
+
     print(f"[benchmark] fetching {len(stale)} universe ticker(s) "
           f"({n_new} new) {stale_start}->{end}, target session {latest_session}")
     total = 0

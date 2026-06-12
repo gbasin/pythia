@@ -30,6 +30,21 @@ ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("PYTHIA_DB_PATH", ROOT / "db" / "panel.sqlite"))
 NEUTRAL_CWD = "/tmp"
 
+
+def ensure_neutral_cwd() -> None:
+    """Refuse to run if someone planted instruction files in the neutral cwd.
+
+    The classifier runs claude with cwd=/tmp and project-scope settings so it
+    loads nothing. /tmp is world-writable, so a foreign /tmp/CLAUDE.md or
+    /tmp/.claude would be silently injected into the judge. Fail loudly."""
+    for name in ("CLAUDE.md", ".claude", "AGENTS.md"):
+        p = Path(NEUTRAL_CWD) / name
+        if p.exists():
+            sys.exit(
+                f"refusing to run: {p} exists and would be loaded as instructions "
+                f"by the classifier CLI. Remove it and retry."
+            )
+
 CLASSIFIER_MODEL = "haiku"
 VALID_STANCES = {"bullish", "bearish", "hold", "neutral", "context"}
 PERSISTED_STANCES = {
@@ -142,6 +157,7 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=120)
     args = ap.parse_args()
 
+    ensure_neutral_cwd()
     if not DB_PATH.exists():
         print(f"db missing: {DB_PATH}", file=sys.stderr)
         return 1

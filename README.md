@@ -2,14 +2,14 @@
 
 what frontier AI models tell people to buy, captured daily.
 
-every night at 8 PM ET, pythia asks **claude opus 4.7**, **gpt-5.5**, and
-**gemini 3.5 flash via antigravity CLI** to recommend stocks — across 10
-prompts and two personas (an aggressive young speculator and a professional
-allocator), with tools/search available. every
-`$TICKER` the model emits is classified by a smaller LLM as **bullish**,
-**bearish**, **neutral**, or **context**. raw text + full JSON traces are
-gzipped and stored in SQLite. a static terminal-aesthetic dashboard rebuilds
-on every run.
+every night at 8 PM ET, pythia asks **claude opus 4.7** (claude code CLI),
+**gpt-5.5** (codex CLI), and **gemini 3.5 flash** (Gemini API with Google
+Search grounding) to recommend stocks — across 10 prompts and two personas
+(an aggressive young speculator and a professional allocator), with
+tools/search available. every `$TICKER` the model emits is classified by a
+smaller LLM as **bullish**, **bearish**, **neutral**, or **context**. raw
+text + full JSON traces are gzipped and stored in SQLite. a static
+terminal-aesthetic dashboard rebuilds on every run.
 
 ## what this measures
 
@@ -29,7 +29,7 @@ names receive is the signal we're capturing, not a bias to scrub.
 prereqs (macOS):
 - [Claude Code CLI](https://docs.claude.com/claude-code) authenticated with a Pro/Max subscription
 - [Codex CLI](https://github.com/openai/codex) authenticated with a ChatGPT Pro subscription
-- [Google Antigravity CLI](https://antigravity.google/) authenticated
+- a [Gemini API key](https://aistudio.google.com/apikey) (pay-per-token; the flash leg costs cents/day)
 - [uv](https://docs.astral.sh/uv/) for Python script execution
 
 ```bash
@@ -37,10 +37,21 @@ git clone git@github.com:gbasin/pythia.git
 cd pythia
 sqlite3 db/panel.sqlite < schema.sql      # initialize DB (first time only)
 
+cat > .env <<'ENV'                        # secrets; gitignored, chmod 600 it
+GEMINI_API_KEY=...                        # required for the gemini leg
+PYTHIA_NTFY_TOPIC=...                     # optional: ntfy.sh push alerts
+PYTHIA_HEALTH_REPO=you/your-fork          # optional: gh issues for health alerts
+ENV
+
 uv run scripts/run_panel.py --dry-run     # preview the 60-tuple matrix
 ./scripts/daily_run.sh                    # run_panel → classify → render
 open dist/index.html                      # view dashboard
 ```
+
+the health check's optional transports both come from `.env`: ntfy pushes
+go to `PYTHIA_NTFY_TOPIC`, and GitHub issues are filed against
+`PYTHIA_HEALTH_REPO` (create the `pythia-health` label there first:
+`gh label create pythia-health`). leave either unset to skip that transport.
 
 individual stages:
 
@@ -63,16 +74,16 @@ every prompt is composed as:
 2. global preamble (current-state grounding + `$TICKER` format directive)
 3. the question (verbatim)
 
-then sent to `claude -p`, `codex exec`, or `agy --print`. the full trace
-where available, or the plain CLI output for Antigravity, is gzipped and
-stored alongside the final response text.
+then sent to `claude -p`, `codex exec`, or the Gemini API (via
+`scripts/gemini_panel_call.py`, which emits a JSONL trace). the full trace
+is gzipped and stored alongside the final response text.
 
 ## project layout
 
 ```
 prompts.yaml                       # 10 prompts + global preamble
 personas.yaml                      # 2 personas (speculator, allocator)
-model_configs.yaml                 # claude_opus, codex_gpt55, agy_flash35 CLI specs
+model_configs.yaml                 # claude_opus, codex_gpt55, gemini_flash invocation specs
 schema.sql                         # sqlite schema
 
 scripts/run_panel.py               # orchestrator
@@ -91,15 +102,18 @@ logs/panel-YYYYMMDD.log            # per-run logs (gitignored)
 ## schedule
 
 a launchd agent fires `scripts/daily_run.sh` nightly at **8 PM ET**
-(machine local time; assumes ET). Install the plist into the user's
-LaunchAgents directory; bootstrapping the copy in `launchd/` directly is only
-for the current launchd session and can disappear after reboot/login changes.
+(machine local time; assumes ET). launchd needs an absolute program path,
+so the tracked plist carries a `/PATH/TO/pythia` placeholder that gets
+substituted at install time. Install into the user's LaunchAgents
+directory; bootstrapping the copy in `launchd/` directly is only for the
+current launchd session and can disappear after reboot/login changes.
 
-first install:
+first install (run from the repo root):
 
 ```bash
 mkdir -p ~/Library/LaunchAgents
-cp launchd/com.pythia.daily.plist ~/Library/LaunchAgents/
+sed "s|/PATH/TO/pythia|$PWD|" launchd/com.pythia.daily.plist \
+  > ~/Library/LaunchAgents/com.pythia.daily.plist
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.pythia.daily.plist
 launchctl print gui/$UID/com.pythia.daily
 ```
@@ -108,7 +122,8 @@ after editing `launchd/com.pythia.daily.plist`, reinstall and reload:
 
 ```bash
 launchctl bootout gui/$UID/com.pythia.daily 2>/dev/null || true
-cp launchd/com.pythia.daily.plist ~/Library/LaunchAgents/
+sed "s|/PATH/TO/pythia|$PWD|" launchd/com.pythia.daily.plist \
+  > ~/Library/LaunchAgents/com.pythia.daily.plist
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.pythia.daily.plist
 launchctl print gui/$UID/com.pythia.daily
 ```
@@ -135,11 +150,14 @@ three pages:
 
 ## design decisions
 
-- **coding-agent CLI surfaces, not consumer chat or API.** claude code,
-  codex exec, and antigravity CLI are scriptable under authenticated
-  subscriptions and capture the "AI agent" surface. consumer chat
-  (chatgpt.com, claude.ai, gemini.google.com) is deferred to a later
-  version — it'd need browser automation.
+- **coding-agent surfaces, not consumer chat.** claude code and codex exec
+  are scriptable under authenticated subscriptions and capture the "AI
+  agent" surface. the gemini leg originally ran through the Antigravity
+  CLI, but its subscription weekly caps made nightly runs unreliable, so it
+  was switched to the Gemini API with Google Search grounding (the closest
+  equivalent surface). consumer chat (chatgpt.com, claude.ai,
+  gemini.google.com) is deferred to a later version — it'd need browser
+  automation.
 - **named-ticker prompts kept on purpose.** "is NVDA a buy?" is what real
   retail asks; the volume of recommendation those names receive is the
   flow signal, not a bias to scrub. unopinionated rephrasing would measure
@@ -172,6 +190,9 @@ everything lives in `db/panel.sqlite`. schema highlights:
   `scripts/benchmark_alpha.py` for the simple top-20 vs all-mentioned
   next-session open→close benchmark
 
+set `PYTHIA_DB_PATH` to point every script at a database somewhere else
+(useful for testing against a copy).
+
 ## known limitations (later versions)
 
 - consumer chat surfaces (chatgpt.com, claude.ai web) not yet captured
@@ -181,5 +202,5 @@ everything lives in `db/panel.sqlite`. schema highlights:
 
 ---
 
-private personal-research repo. not investment advice. not a recommendation.
-just an experiment.
+MIT licensed. not investment advice. not a recommendation. just an
+experiment.

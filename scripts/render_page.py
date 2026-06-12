@@ -26,6 +26,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("PYTHIA_DB_PATH", ROOT / "db" / "panel.sqlite"))
+# Shown in page footers as the pointer to the source code. Never render
+# local filesystem paths into the public pages.
+REPO_URL = "github.com/gbasin/pythia"
 PROMPTS_YAML_PATH = ROOT / "prompts.yaml"
 ASSETS_DIR = ROOT / "assets"
 OUT_DIR = Path(os.environ.get("PYTHIA_DIST_DIR", ROOT / "dist"))
@@ -2054,8 +2057,8 @@ def render_main_page(d: dict, day: str, days: list[str], is_index: bool) -> str:
         overview=html.escape(render_overview(d)),
         runs=html.escape(render_runs(d)),
         footer=html.escape(FOOTER),
-        db_rel=html.escape(str(DB_PATH.relative_to(ROOT) if DB_PATH.is_relative_to(ROOT) else DB_PATH)),
-        root=html.escape(str(ROOT)),
+        db_rel=html.escape(str(DB_PATH.relative_to(ROOT) if DB_PATH.is_relative_to(ROOT) else DB_PATH.name)),
+        root=html.escape(REPO_URL),
     )
 
 

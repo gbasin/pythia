@@ -12,12 +12,14 @@ detect_refusal logic. Run once after changing the refusal heuristic.
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 from pathlib import Path
 
 from run_panel import detect_refusal
 
-DB = Path(__file__).resolve().parent.parent / "db" / "panel.sqlite"
+ROOT = Path(__file__).resolve().parent.parent
+DB = Path(os.environ.get("PYTHIA_DB_PATH", ROOT / "db" / "panel.sqlite"))
 
 
 def main() -> None:

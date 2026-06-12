@@ -27,7 +27,6 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +41,22 @@ MODEL_CONFIGS_PATH = ROOT / "model_configs.yaml"
 NASDAQ_LISTED_PATH = ROOT / "data" / "nasdaqlisted.txt"
 OTHER_LISTED_PATH = ROOT / "data" / "otherlisted.txt"
 NEUTRAL_CWD = "/tmp"  # avoid loading CLAUDE.md / project memory from a real repo
+
+
+def ensure_neutral_cwd() -> None:
+    """Refuse to run if someone planted instruction files in the neutral cwd.
+
+    CLIs are invoked with cwd=/tmp and project-scope settings so they load
+    nothing. /tmp is world-writable, so a foreign /tmp/CLAUDE.md or
+    /tmp/.claude would be silently injected into every panel response.
+    Fail loudly instead."""
+    for name in ("CLAUDE.md", ".claude", "AGENTS.md"):
+        p = Path(NEUTRAL_CWD) / name
+        if p.exists():
+            sys.exit(
+                f"refusing to run: {p} exists and would be loaded as instructions "
+                f"by panel CLIs. Remove it (or change NEUTRAL_CWD) and retry."
+            )
 
 # Index/benchmark allowlist — calculated indexes not present in symbol files.
 # Crypto symbols ($BTC, $ETH) are deliberately NOT here — they'll be marked
@@ -117,6 +132,10 @@ def load_yaml(path: Path):
 
 
 def upsert_versioned(con, table: str, id_: str, version_hash: str, **fields):
+    # Table/column names can't be parameterized in SQLite; keep them pinned
+    # to known literals so config-derived strings can never reach the SQL.
+    if table not in ("prompts", "personas"):
+        raise ValueError(f"unexpected table: {table!r}")
     cols = ["id", "version_hash", *fields.keys()]
     placeholders = ",".join("?" * len(cols))
     values = [id_, version_hash, *fields.values()]
@@ -193,16 +212,6 @@ def detect_artifact_leak(text: str | None) -> bool:
     answers.
     """
     return bool(text and any(pat.search(text) for pat in ARTIFACT_LEAK_PATTERNS))
-
-
-def trace_section(name: str, data: bytes | str | None) -> bytes:
-    if data is None:
-        body = b""
-    elif isinstance(data, bytes):
-        body = data
-    else:
-        body = data.encode("utf-8", errors="replace")
-    return b"===== " + name.encode("utf-8") + b" =====\n" + body + b"\n"
 
 
 def classify_cli_failure(text: str, parsed_text: str, returncode: int) -> str | None:
@@ -381,14 +390,7 @@ def run_one(model_config: dict, full_prompt: str, timeout: int) -> dict:
         nuke_claude_memory()
     cmd = [model_config["cli_command"]]
     cwd = NEUTRAL_CWD
-    tmp_cwd = None
-    agy_log_path = None
-    if model_config["provider"] == "agy":
-        tmp_cwd = tempfile.TemporaryDirectory(prefix="pythia-agy-")
-        cwd = tmp_cwd.name
-        agy_log_path = Path(cwd) / "agy.log"
-        cmd.extend(["--log-file", str(agy_log_path)])
-    elif model_config["provider"] == "gemini":
+    if model_config["provider"] == "gemini":
         # Wrapper script is referenced as `scripts/gemini_panel_call.py` in
         # model_configs.yaml; resolve it against the project root rather than
         # NEUTRAL_CWD so the path works under launchd too.
@@ -399,9 +401,6 @@ def run_one(model_config: dict, full_prompt: str, timeout: int) -> dict:
     if model_config.get("subcommand") == "exec":
         cmd.append("-")  # codex requires "-" to read from stdin when also receiving piped input
     input_bytes = full_prompt.encode("utf-8")
-    if model_config["provider"] == "agy":
-        cmd.append(full_prompt)
-        input_bytes = None
 
     started_mono = time.monotonic()
     started_iso = now_iso()
@@ -415,17 +414,8 @@ def run_one(model_config: dict, full_prompt: str, timeout: int) -> dict:
             check=False,
         )
     except subprocess.TimeoutExpired as e:
-        agy_log = agy_log_path.read_text(errors="replace") if agy_log_path and agy_log_path.exists() else ""
         raw_stdout = e.stdout or b""
         raw_stderr = e.stderr or b""
-        if model_config["provider"] == "agy":
-            raw_stdout = (
-                trace_section("stdout", raw_stdout)
-                + trace_section("stderr", raw_stderr)
-                + trace_section("agy.log", agy_log)
-            )
-        if tmp_cwd:
-            tmp_cwd.cleanup()
         return {
             "raw_stdout": raw_stdout,
             "raw_stderr": raw_stderr,
@@ -444,7 +434,6 @@ def run_one(model_config: dict, full_prompt: str, timeout: int) -> dict:
         }
 
     elapsed_ms = int((time.monotonic() - started_mono) * 1000)
-    agy_log = agy_log_path.read_text(errors="replace") if agy_log_path and agy_log_path.exists() else ""
     if model_config["trace_format"] == "claude-stream-json":
         parsed = parse_claude_stream(proc.stdout)
         raw_trace = proc.stdout
@@ -461,21 +450,12 @@ def run_one(model_config: dict, full_prompt: str, timeout: int) -> dict:
             "tokens_in": 0, "tokens_out": 0, "cost": None, "duration_ms": None,
         }
         raw_trace = proc.stdout
-        if model_config["provider"] == "agy":
-            raw_trace = (
-                trace_section("stdout", proc.stdout)
-                + trace_section("stderr", proc.stderr)
-                + trace_section("agy.log", agy_log)
-            )
     failure_text = "\n".join([
         parsed.get("text") or "",
         proc.stdout.decode("utf-8", errors="replace"),
         proc.stderr.decode("utf-8", errors="replace"),
-        agy_log,
     ])
     error = classify_cli_failure(failure_text, parsed.get("text") or "", proc.returncode)
-    if tmp_cwd:
-        tmp_cwd.cleanup()
 
     return {
         "raw_stdout": raw_trace,
@@ -558,6 +538,7 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    ensure_neutral_cwd()
     personas_data = load_yaml(PERSONAS_PATH)
     prompts_data = load_yaml(PROMPTS_PATH)
     model_configs_data = load_yaml(MODEL_CONFIGS_PATH)
