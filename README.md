@@ -35,16 +35,17 @@ prereqs (macOS):
 ```bash
 git clone git@github.com:gbasin/pythia.git
 cd pythia
-sqlite3 db/panel.sqlite < schema.sql      # initialize DB (first time only)
+mkdir -p db && sqlite3 db/panel.sqlite < schema.sql   # initialize DB (first time only)
 
-cat > .env <<'ENV'                        # secrets; gitignored, chmod 600 it
+cat > .env <<'ENV'                        # secrets; gitignored
 GEMINI_API_KEY=...                        # required for the gemini leg
 PYTHIA_NTFY_TOPIC=...                     # optional: ntfy.sh push alerts
 PYTHIA_HEALTH_REPO=you/your-fork          # optional: gh issues for health alerts
 ENV
+chmod 600 .env
 
-uv run scripts/run_panel.py --dry-run     # preview the 60-tuple matrix
-./scripts/daily_run.sh                    # run_panel → classify → render
+uv run scripts/run_panel.py --dry-run     # preview the full run matrix
+./scripts/daily_run.sh                    # full pipeline (~30 min; silent — watch logs/panel-YYYYMMDD.log)
 open dist/index.html                      # view dashboard
 ```
 
@@ -61,13 +62,14 @@ uv run scripts/run_panel.py --prompt-id name_01 --persona-id speculator \
     --model-config-id claude_opus        # one tuple, for smoke-testing
 uv run scripts/classify_mentions.py       # label sentiment on new mentions
 uv run scripts/classify_mentions.py --reclassify   # nuke + redo all labels
-uv run scripts/render_page.py             # rebuild index.html + trends.html + alpha.html + prompts.html
+uv run scripts/render_page.py             # rebuild index + trends + alpha + prompts + per-day pages
 uv run scripts/benchmark_alpha.py --rebuild-signals # 1d open→close alpha check
 ```
 
 ## panel composition
 
-per nightly run: **10 prompts × 2 personas × 3 models = 60 CLI calls**.
+every prompt runs for both personas on all three models, every night —
+60 calls in all (claude and codex via their CLIs, gemini via the API).
 
 every prompt is composed as:
 1. `About me:` persona block
@@ -81,21 +83,26 @@ is gzipped and stored alongside the final response text.
 ## project layout
 
 ```
-prompts.yaml                       # 10 prompts + global preamble
-personas.yaml                      # 2 personas (speculator, allocator)
+prompts.yaml                       # panel prompts + global preamble
+personas.yaml                      # personas: speculator, allocator
 model_configs.yaml                 # claude_opus, codex_gpt55, gemini_flash invocation specs
+health_checks.yaml                 # post-run health thresholds + alert routing
 schema.sql                         # sqlite schema
+data/                              # NASDAQ/NYSE symbol directories (ticker universe)
 
 scripts/run_panel.py               # orchestrator
+scripts/gemini_panel_call.py       # gemini API wrapper (emits a JSONL trace)
 scripts/classify_mentions.py       # LLM-as-judge sentiment labeler (haiku)
+scripts/benchmark_alpha.py         # price cache + 1d open→close alpha benchmark
 scripts/render_page.py             # static html dashboard generator
-scripts/daily_run.sh               # wrapper: run_panel → classify → render
+scripts/health_check.py            # post-run checks → ntfy push + github issues
+scripts/backfill_refusal.py        # maintenance: recompute refusal flags
+scripts/daily_run.sh               # wrapper: run_panel → classify → benchmark → render → health check
 
 launchd/com.pythia.daily.plist     # 8 PM ET nightly schedule
 
 db/panel.sqlite                    # all data (gitignored)
-dist/index.html                    # main dashboard (gitignored)
-dist/prompts.html                  # prompts review subpage (gitignored)
+dist/                              # rendered dashboard (gitignored)
 logs/panel-YYYYMMDD.log            # per-run logs (gitignored)
 ```
 
@@ -140,9 +147,10 @@ rm ~/Library/LaunchAgents/com.pythia.daily.plist
 after a run, view at:
 - `file:///.../pythia/dist/index.html`
 - `python3 -m http.server 8731 -d dist` → `http://localhost:8731`
-- accessible over Tailscale at the same URL via IP / MagicDNS
+- `dist/` is a self-contained static directory — serve it however you like
+  (LAN, tailnet, github pages)
 
-three pages:
+pages:
 - `/` — current snapshot + trend highlights
 - `/trends.html` — rolling ranks, first sightings, provider consensus, day index
 - `/alpha.html` — paper benchmark: top-20 recommendation flow vs all mentioned
@@ -180,7 +188,7 @@ everything lives in `db/panel.sqlite`. schema highlights:
 
 - `runs` — one per panel invocation
 - `prompts`, `personas` — versioned by content hash (edits don't break old data)
-- `model_configs` — one per CLI variant
+- `model_configs` — one per model surface
 - `responses` — `raw_text` + `raw_trace_gz BLOB` (gzipped full JSONL) +
   tokens, latency, session_id
 - `mentions` — one row per unique ticker per response, with classifier
@@ -198,7 +206,8 @@ set `PYTHIA_DB_PATH` to point every script at a database somewhere else
 - consumer chat surfaces (chatgpt.com, claude.ai web) not yet captured
 - single-vendor classifier (claude haiku) — could add gpt-mini for cross-vendor sanity
 - US-only personas, US-only ticker universe
-- no price-impact backtests yet (the dataset is too young; need weeks of data first)
+- nothing deeper than the 1-day alpha check yet — no multi-day horizons,
+  no factor controls, no price-impact analysis (the dataset is too young)
 
 ---
 
