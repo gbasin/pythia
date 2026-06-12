@@ -1623,7 +1623,9 @@ def render_day_nav(current: str, days: list[str], is_index: bool) -> str:
         return d[5:] if len(d) >= 10 else d
 
     def chip(d: str) -> str:
-        if d == current:
+        # On day pages the current night reads as selected; on the index every
+        # chip is a link, since the index is not any single night's page.
+        if d == current and not is_index:
             return f'<span class="day-current">[{html.escape(short(d))}]</span>'
         return f'<a href="{html.escape(_day_href(d, is_index))}" title="{html.escape(d)}">{html.escape(short(d))}</a>'
 
@@ -1799,6 +1801,39 @@ def render_alpha_source(alpha: dict) -> str:
     return f"Source: nightly model runs · prices via yfinance · as of {html.escape(alpha['summary']['latest_trade_date'])}"
 
 
+def render_persona_teaser(d: dict, day: str) -> str:
+    """Index teaser: the night's strongest persona skews, linking to the
+    full table on the day page."""
+    rows = []
+    for r in d["persona_delta"]:
+        spec = r["spec_n"] or 0
+        alloc = r["alloc_n"] or 0
+        total = spec + alloc
+        if total >= 4:
+            rows.append((r["ticker"], spec, alloc, round(100 * (spec - alloc) / total)))
+    rows.sort(key=lambda r: (-abs(r[3]), -(r[1] + r[2])))
+    rows = rows[:5]
+    if not rows:
+        return '<p class="dim">no persona split recorded for this night yet.</p>'
+    out = [
+        '<div class="scroll"><table class="data-table">',
+        "<thead><tr><th>ticker</th><th class=\"num\">spec</th>"
+        "<th class=\"num\">alloc</th><th class=\"num\">skew</th></tr></thead><tbody>",
+    ]
+    for ticker, spec, alloc, skew in rows:
+        cls = "up" if skew > 0 else "down" if skew < 0 else "zero"
+        out.append(
+            "<tr>"
+            f'<td>${html.escape(ticker)}</td>'
+            f'<td class="num">{spec}</td>'
+            f'<td class="num">{alloc}</td>'
+            f'<td class="num"><span class="{cls}">{skew:+d}%</span></td>'
+            "</tr>"
+        )
+    out.append("</tbody></table></div>")
+    return "".join(out)
+
+
 def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[str],
                       n_total_responses: int, con) -> tuple[str, str, str]:
     insight = compute_insight(con, day)
@@ -1833,10 +1868,16 @@ def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[s
     {render_consensus(trends["consensus"][:5], trends["providers"], compact=True)}
     <div class="more"><a href="trends.html#consensus">full table</a></div>
   </section>
+  <section id="personas">
+    <h2>WHO'S ASKING</h2>
+    <div class="label">SKEW = PERSONA GAP / TOTAL MENTIONS · NIGHT OF {html.escape(day)}</div>
+    {render_persona_teaser(d, day)}
+    <div class="more"><a href="day/{html.escape(day)}.html#persona-delta">full table</a></div>
+  </section>
 </div>
 
-<section id="nights">
-  <h2>NIGHTS RECORDED</h2>
+<section id="record">
+  <h2>RECORD</h2>
   <div class="label">ONE SQUARE PER NIGHT · FILLED = PANEL RAN · OPEN = MISSED</div>
   {render_pipeline(con)}
 </section>
@@ -1844,7 +1885,7 @@ def render_index_page(d: dict, trends: dict, alpha: dict, day: str, days: list[s
 <details>
   <summary>terms</summary>
   <div class="details-body">
-    <p>net means bullish mentions minus bearish mentions. flow is the ranked push models gave tickers on the night shown. first sighting means the first night a ticker appeared in the logged panel. consensus means more than one provider pushed the same ticker bullish.</p>
+    <p>net means bullish mentions minus bearish mentions. flow is the ranked push models gave tickers on the night shown. first sighting means the first night a ticker appeared in the logged panel. consensus means more than one provider pushed the same ticker bullish. skew is the speculator-allocator mention gap divided by total mentions.</p>
   </div>
 </details>
 """
