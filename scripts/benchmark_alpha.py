@@ -21,6 +21,7 @@ import math
 import os
 import sqlite3
 import sys
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -41,6 +42,16 @@ YFINANCE_SKIP = {"SPX", "NDX", "RUT", "DJI", "DJX", "VIX", "COMP", "DXY", "IXIC"
 # two symbols.
 REFERENCE_TICKERS = ("SPY", "QQQ")
 REFERENCE_REFRESH_DAYS = 7
+
+# yfinance silently drops tickers under load: rate-limiting when a large/
+# threaded batch bursts (the response just comes back empty), and 'unable to
+# open database file' when worker threads race to create yfinance's tz cache.
+# Both surface as a missing ticker. We retry the stragglers single-threaded in
+# small chunks — small batches dodge the rate-limit empties and single-threaded
+# dodges the cache race — a few times before accepting them as absent.
+PRICE_FETCH_RETRIES = 3
+PRICE_FETCH_RETRY_WAIT = 2.0
+PRICE_FETCH_RETRY_CHUNK = 10
 
 
 @dataclass(frozen=True)
@@ -209,7 +220,10 @@ def yahoo_symbol(ticker: str) -> str:
     return ticker.replace(".", "-")
 
 
-def fetch_price_history(tickers: list[str], start: date, end: date) -> pd.DataFrame:
+def _download_once(tickers: list[str], start: date, end: date, *, threads: bool) -> pd.DataFrame:
+    """One yfinance pull, normalized to long form with a 'Ticker' column.
+    Rows without a usable open/close are dropped so the caller can tell which
+    tickers actually returned data (vs. yfinance placeholder NaN rows)."""
     if not tickers:
         return pd.DataFrame()
     yahoo_to_ticker = {yahoo_symbol(t): t for t in tickers}
@@ -220,7 +234,7 @@ def fetch_price_history(tickers: list[str], start: date, end: date) -> pd.DataFr
         auto_adjust=False,
         group_by="ticker",
         progress=False,
-        threads=True,
+        threads=threads,
     )
     if data.empty:
         return pd.DataFrame()
@@ -243,7 +257,51 @@ def fetch_price_history(tickers: list[str], start: date, end: date) -> pd.DataFr
     out = pd.concat(frames)
     out = out.reset_index().rename(columns={"Date": "date"})
     out["date"] = pd.to_datetime(out["date"]).dt.date.astype(str)
+    for col in ("Open", "Close"):
+        if col in out.columns:
+            out = out[out[col].notna()]
     return out
+
+
+def fetch_price_history(tickers: list[str], start: date, end: date) -> pd.DataFrame:
+    """Fetch daily bars, recovering tickers the bulk pull silently drops.
+
+    A threaded bulk download is fast but loses tickers to transient yfinance
+    faults (rate-limiting under a burst returns empty rows; a tz-cache 'unable
+    to open database file' race between worker threads). Stragglers are retried
+    single-threaded in small chunks — small batches dodge the rate-limit
+    empties and single-threaded dodges the cache race — for a few passes before
+    they're accepted as genuinely absent."""
+    if not tickers:
+        return pd.DataFrame()
+
+    frames: list[pd.DataFrame] = []
+    pending = list(tickers)
+
+    bulk = _download_once(pending, start, end, threads=True)
+    if not bulk.empty:
+        frames.append(bulk)
+        got = {str(t).upper() for t in bulk["Ticker"].unique()}
+        pending = [t for t in pending if t.upper() not in got]
+
+    for _ in range(PRICE_FETCH_RETRIES):
+        if not pending:
+            break
+        recovered: set[str] = set()
+        for i in range(0, len(pending), PRICE_FETCH_RETRY_CHUNK):
+            chunk = pending[i : i + PRICE_FETCH_RETRY_CHUNK]
+            part = _download_once(chunk, start, end, threads=False)
+            if part.empty:
+                continue
+            frames.append(part)
+            recovered |= {str(t).upper() for t in part["Ticker"].unique()}
+        pending = [t for t in pending if t.upper() not in recovered]
+        if pending:
+            time.sleep(PRICE_FETCH_RETRY_WAIT)
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
 
 
 def _write_bars(con: sqlite3.Connection, hist: pd.DataFrame) -> int:
