@@ -305,9 +305,10 @@ def run_checks(con, cfg: dict) -> list[Finding]:
                     "pages_stale", sev,
                     f"published dashboard stale: live shows {live}, db has {db_day}",
                     f"{url} is {behind} days behind the database (threshold "
-                    f"{c.get('max_behind_days', 1)}d). The gh-pages push is "
-                    f"failing — check the 'publishing dashboard' stage in the "
-                    f"panel logs and run scripts/publish_pages.sh manually."))
+                    f"{c.get('max_behind_days', 1)}d). The gh-pages push likely "
+                    f"landed but the Pages deploy didn't apply — check "
+                    f"`gh run list --workflow=deploy-pages.yml` and re-deploy "
+                    f"with `gh workflow run deploy-pages.yml --ref main`."))
 
     # Classifier needs_review rate.
     if "classifier_needs_review" in checks and n_mentions:
@@ -357,25 +358,69 @@ def _gh(args: list[str], repo: str) -> subprocess.CompletedProcess:
         capture_output=True, text=True, timeout=30)
 
 
-def open_issue_keys(cfg: dict) -> set[str]:
-    """Return the set of finding-keys that already have an open issue, parsed
-    from a marker line in the body so we never double-file the same problem."""
+def open_health_issues(cfg: dict) -> dict[str, list[int]]:
+    """Map each finding-key to the open issue number(s) carrying it, parsed from
+    the marker line we stamp into every filed issue. Drives both dedup (don't
+    double-file) and auto-close (close issues whose condition has cleared). Only
+    issues bearing the marker are returned, so hand-filed issues are never
+    touched even if they share the health label."""
     t = cfg["transports"]["gh_issue"]
+    out: dict[str, list[int]] = {}
     try:
         r = _gh(["issue", "list", "--state", "open", "--label", t["label"],
-                 "--json", "body", "--limit", "100"], gh_repo(cfg))
+                 "--json", "number,body", "--limit", "100"], gh_repo(cfg))
         if r.returncode != 0:
             print(f"  gh: list failed: {r.stderr.strip()}")
-            return set()
-        keys = set()
+            return out
         for issue in json.loads(r.stdout or "[]"):
             for line in (issue.get("body") or "").splitlines():
                 if line.startswith("pythia-health-key:"):
-                    keys.add(line.split(":", 1)[1].strip())
-        return keys
+                    key = line.split(":", 1)[1].strip()
+                    out.setdefault(key, []).append(issue["number"])
     except Exception as e:  # noqa: BLE001
         print(f"  gh: list error: {e}")
-        return set()
+    return out
+
+
+def open_issue_keys(cfg: dict) -> set[str]:
+    """Finding-keys that already have an open issue (dedup guard for filing)."""
+    return set(open_health_issues(cfg))
+
+
+def close_issue(cfg: dict, number: int, key: str, dry_run: bool) -> bool:
+    """Close a resolved health issue with a marker-stamped audit comment."""
+    if dry_run:
+        print(f"  gh: would close (#{number}, {key}) — condition cleared")
+        return False
+    comment = ("Condition cleared: no matching finding on the latest health "
+               "check, so this is auto-resolving.\n\n"
+               f"pythia-health-key: {key}\n"
+               "_closed automatically by scripts/health_check.py_")
+    try:
+        r = _gh(["issue", "close", str(number), "--comment", comment], gh_repo(cfg))
+        if r.returncode != 0:
+            print(f"  gh: close failed (#{number}, {key}): {r.stderr.strip()}")
+            return False
+        print(f"  gh: closed (#{number}, {key}): condition cleared")
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"  gh: close error (#{number}, {key}): {e}")
+        return False
+
+
+def resolve_cleared(cfg: dict, findings: list[Finding], dry_run: bool) -> None:
+    """Auto-close open health issues whose finding no longer fires. Runs every
+    check (including all-green, when the most issues clear); the marker filter in
+    open_health_issues keeps this to issues the check itself filed."""
+    gh = cfg["transports"].get("gh_issue", {})
+    if not gh.get("enabled") or not gh_repo(cfg):
+        return
+    active = {f.key for f in findings}
+    for key, numbers in open_health_issues(cfg).items():
+        if key in active:
+            continue
+        for number in numbers:
+            close_issue(cfg, number, key, dry_run)
 
 
 def file_issue(cfg: dict, finding: Finding, existing: set[str]) -> bool:
@@ -446,11 +491,14 @@ def main() -> None:
     con.row_factory = sqlite3.Row
     findings = run_checks(con, cfg)
 
-    if not findings:
+    if findings:
+        route(cfg, findings, dry_run=args.dry_run)
+    else:
         print("health check: all green")
-        return
 
-    route(cfg, findings, dry_run=args.dry_run)
+    # Close any open health issue whose condition has since cleared. Runs even
+    # on an all-green check — that's precisely when issues resolve.
+    resolve_cleared(cfg, findings, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

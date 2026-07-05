@@ -48,11 +48,12 @@ checks:
     max_sessions: 1
     max_age_days: 5
 
-  # Published dashboard (GitHub Pages) falling behind the database — i.e.
-  # the gh-pages push in publish_pages.sh failing while everything upstream
-  # stays green. behind = db's latest day minus the day in the live page's
-  # title. 1 day behind is tolerated (Pages CDN/build latency right after
-  # the push); 2+ means the push has failed on consecutive nights.
+  # Published dashboard (GitHub Pages) falling behind the database — i.e. the
+  # Pages deploy failing (the deploy-pages.yml workflow that publish_pages.sh
+  # fires) while everything upstream stays green. behind = db's latest day minus
+  # the day in the live page's title. 1 day behind is tolerated (Pages CDN /
+  # deploy latency right after the push); 2+ means the deploy has failed on
+  # consecutive nights.
   pages_stale:
     severity: warn
     url: https://gbasin.github.io/pythia/

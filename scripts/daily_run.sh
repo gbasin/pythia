@@ -41,7 +41,8 @@ fi
   echo "--- rendering dashboard ---"
   uv run scripts/render_page.py || true
   echo "--- publishing dashboard ---"
-  # Pushes dist/ to the gh-pages branch (gbasin.github.io/pythia).
+  # Pushes dist/ to the gh-pages branch, then triggers the Pages deploy
+  # workflow (deploy-pages.yml) that serves gbasin.github.io/pythia.
   ./scripts/publish_pages.sh || true
   echo "--- health check ---"
   # Inspects this run, pushes critical issues to ntfy + files GitHub issues.
