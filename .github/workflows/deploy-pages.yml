@@ -1,0 +1,48 @@
+name: Deploy Pages
+
+# Publishes the pre-built dashboard that lives on the gh-pages branch.
+# The nightly run (scripts/publish_pages.sh) pushes dist/ to gh-pages and then
+# fires this workflow with `gh workflow run deploy-pages.yml`. We deploy through
+# Actions rather than GitHub's implicit legacy Pages builder because that builder
+# silently wedged (push-triggered builds stuck at duration=0; see health issue
+# "pages_stale"). An explicit workflow run is observable and retryable.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two deploys at once, and let an in-flight deploy finish rather than
+# cancelling it — a half-applied Pages deploy is worse than a queued one.
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout gh-pages content
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Drop git metadata from the artifact
+        run: rm -rf .git
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload gh-pages tree as the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

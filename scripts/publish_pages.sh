@@ -54,3 +54,18 @@ fi
 
 git push --quiet origin "$COMMIT:refs/heads/$BRANCH"
 echo "publish: pushed $COMMIT to $BRANCH"
+
+# Deploy via the explicit Actions workflow rather than GitHub's implicit legacy
+# Pages builder, which has wedged on push (builds stuck at duration=0; see the
+# pages_stale health finding). gh auth is present in the run environment (the
+# health check files issues through it). If this trigger fails the push still
+# landed, so the site is one manual `gh workflow run deploy-pages.yml` away.
+if command -v gh >/dev/null 2>&1; then
+  if gh workflow run deploy-pages.yml --ref main >/dev/null 2>&1; then
+    echo "publish: triggered Pages deploy workflow"
+  else
+    echo "publish: WARN could not trigger deploy workflow; run: gh workflow run deploy-pages.yml --ref main" >&2
+  fi
+else
+  echo "publish: WARN gh not found; deploy manually: gh workflow run deploy-pages.yml --ref main" >&2
+fi
